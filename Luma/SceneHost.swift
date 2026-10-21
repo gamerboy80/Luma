@@ -376,11 +376,14 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
     private var mountStarted = false
     private var stopped = false
     private var capturing = false
+    private var sceneStartupPauseDeadline: Date?
+    private var sceneStartupPauseTask: Task<Void, Never>?
     private var mediaSubscription: AnyCancellable?
     private var lastRequestedPointer: PointerPosition?
     private var lastDeliveredPointer: PointerPosition?
     private var pendingPointer: PointerPosition?
     private var pointerEvaluationInFlight = false
+    private static let sceneStartupSettleInterval: TimeInterval = 1.5
     private static func rendererFit(_ fit: FitMode, kind: WallpaperKind) -> String {
         // Scene Fill is performed by clipping a full, uncropped scene projection in the
         // native display viewport. Asking WebWallGL to crop first makes the cropped edges
@@ -425,6 +428,12 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
         switch body["event"] {
         case "ready":
             guard !didBecomeReady else { return }
+            if wallpaperKind == .scene {
+                // WebWallGL reports its first composited frame before all SceneScript
+                // update hooks have run. A scene that is already paused by policy would
+                // otherwise freeze on placeholders and partially initialized layers.
+                sceneStartupPauseDeadline = Date().addingTimeInterval(Self.sceneStartupSettleInterval)
+            }
             didBecomeReady = true; applyRendererSettings(); setPlaying(desiredPlaying); updateMedia(SceneMediaProvider.shared.snapshot); ready?()
         case "error": failed?((body["message"] ?? "The scene renderer stopped.") + (lastResourceWarning.isEmpty ? "" : "\n" + lastResourceWarning))
         case "diagnostic": lastResourceWarning = body["message"] ?? ""; diagnostic?(lastResourceWarning)
@@ -469,6 +478,31 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { failed?("The scene renderer exited. Retry this wallpaper to rebuild its graphics context.") }
     func setPlaying(_ playing: Bool) {
         desiredPlaying = playing
+        guard didBecomeReady, !stopped, submittedPlaying != playing else { return }
+        if !playing, wallpaperKind == .scene,
+           let deadline = sceneStartupPauseDeadline, Date() < deadline {
+            guard sceneStartupPauseTask == nil else { return }
+            let delay = max(0, deadline.timeIntervalSinceNow)
+            sceneStartupPauseTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled, let self else { return }
+                self.sceneStartupPauseTask = nil
+                self.sceneStartupPauseDeadline = nil
+                guard !self.stopped, !self.desiredPlaying else { return }
+                self.submitPlaying(false)
+            }
+            return
+        }
+        if playing {
+            sceneStartupPauseTask?.cancel()
+            sceneStartupPauseTask = nil
+            if submittedPlaying == false { sceneStartupPauseDeadline = nil }
+        } else {
+            sceneStartupPauseDeadline = nil
+        }
+        submitPlaying(playing)
+    }
+    private func submitPlaying(_ playing: Bool) {
         guard didBecomeReady, !stopped, submittedPlaying != playing else { return }
         submittedPlaying = playing
         webView.evaluateJavaScript("window.wallpaper?.\(playing ? "resume" : "pause")();void 0") { [weak self] _, error in
@@ -804,6 +838,7 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        sceneStartupPauseTask?.cancel(); sceneStartupPauseTask = nil; sceneStartupPauseDeadline = nil
         mediaSubscription = nil
         pendingPointer = nil
         didBecomeReady = false

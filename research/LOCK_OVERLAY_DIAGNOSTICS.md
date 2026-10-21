@@ -1,4 +1,10 @@
-# Lock-screen overlay startup failure — 2026-10-21
+# Retired lock-screen overlay diagnostics — 2026-10-21
+
+> Historical investigation only. Luma removed the private-SkyLight overlay
+> because observed stacking could not guarantee that the app remained behind
+> authentication controls. Do not restore the overlay based on these notes.
+> The current Lock Screen page uses macOS-managed wallpaper settings and static
+> previews instead.
 
 On macOS 27.0.1 (26A434), an isolated WindowServer probe reproduced the
 overlay's startup failure without locking the Mac or changing wallpaper settings.
@@ -28,10 +34,7 @@ Hide action from hiding the overlay windows, and supplements distributed lock
 notifications with current-session polling. The UI reports renderer readiness
 and warnings separately from space creation.
 
-Regression coverage in `Tests/LockOverlayTests.swift` exercises void operations,
-IDs above 32 bits, attachment rejection, failed setup cleanup, cleanup retry and
-an unavailable connection. `Scripts/test-scenes.sh --live-lock-overlay` runs
-those tests, the transparent-window WindowServer check, and the normal scene
-and SceneScript suite. It never locks the Mac. Physical lock/unlock, WebKit
-compositing while authenticated UI is visible, and sleep transitions remain
-private-API behavior that needs a real lock-screen check.
+At the time, regression coverage exercised void operations, IDs above 32 bits,
+attachment rejection, failed setup cleanup, cleanup retry, and an unavailable
+connection. That code and its tests have been removed along with the overlay.
+No live lock/unlock experiment should be run from this historical report.

@@ -36,8 +36,6 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
         app.run()
     }
     @MainActor static func verify() async throws {
-        try LockOverlayTests.verify()
-        if CommandLine.arguments.contains("--live-lock-overlay") { try LockOverlayTests.verifyWindowServer() }
         let root=FileManager.default.temporaryDirectory.appendingPathComponent("LumaSceneTests-\(UUID())")
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
         defer {try? FileManager.default.removeItem(at:root)}
@@ -291,6 +289,9 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
         _ = try await host.webView.callAsyncJavaScript("window.lumaEditorSnapshot=()=>({available:true,time:0,layers:Array.from({length:5001},()=>({}))});return true", arguments: [:], in: nil, contentWorld: .page)
         do { _ = try await host.editorSnapshot(includeLayers: true); throw LumaError("An oversized snapshot was accepted.") }
         catch let error as LumaError { guard error.message.contains("unsupported layer") else { throw error } }
+        // Let the scene's initial settle window complete before measuring later
+        // playback transitions; the separate paused-startup regression covers it.
+        try await Task.sleep(for: .milliseconds(1_600))
         _ = try await host.webView.callAsyncJavaScript("""
         window.lumaEditorSnapshot=window.__lumaSnapshotOriginal;delete window.__lumaSnapshotOriginal;
         window.__lumaControlOriginals={};window.__lumaControlCalls={};
@@ -460,7 +461,7 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
             try Data("{\"title\":\"Script fixture\",\"type\":\"scene\",\"file\":\"scene.pkg\"}".utf8).write(to: folder.appendingPathComponent("project.json"))
             return folder
         }
-        func run(_ name: String, code: String, enabled: Bool, staleApproval: Bool = false, changedAfterReview: Bool = false, rejected: Bool = false, timeoutEvent: String? = nil, helper: String? = nil, objectScript: String? = nil, extraLayer: Bool = false, extraParticle: Bool = false, expectedDiagnostic: String? = nil, check: ((SceneHost) async throws -> Void)? = nil) async throws {
+        func run(_ name: String, code: String, enabled: Bool, staleApproval: Bool = false, changedAfterReview: Bool = false, rejected: Bool = false, timeoutEvent: String? = nil, helper: String? = nil, objectScript: String? = nil, extraLayer: Bool = false, extraParticle: Bool = false, pauseImmediately: Bool = false, expectedDiagnostic: String? = nil, check: ((SceneHost) async throws -> Void)? = nil) async throws {
             let folder = try project(name, code: code, helper: helper, objectScript: objectScript, extraLayer: extraLayer, extraParticle: extraParticle)
             let raceScriptURL = folder.appendingPathComponent("reviewed-helper.js")
             if changedAfterReview { try Data("export function update(){ return 'reviewed'; }".utf8).write(to: raceScriptURL) }
@@ -489,6 +490,7 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
                 }
                 try await Task.sleep(for: .milliseconds(50))
             }
+            if pauseImmediately { host.setPlaying(false) }
             if let event = timeoutEvent {
                 let timeout = Date().addingTimeInterval(8)
                 while !diagnostics.contains(where: { $0.contains("timed out during \(event)") }) {
@@ -504,7 +506,7 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
                 guard diagnostics.filter({ $0.contains("timed out") }).count == count else { throw LumaError("Timed-out scripts continued receiving events.") }
             } else {
                 let expected = enabled && !staleApproval && !changedAfterReview && !rejected ? 123.0 : 960.0
-                host.setPlaying(true)
+                if !pauseImmediately { host.setPlaying(true) }
                 let limit = Date().addingTimeInterval(5)
                 var properties: [String: Any]?
                 repeat {
@@ -535,6 +537,15 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
                   value["clockOK"] as? Bool == true, (value["x"] as? Double) == 123,
                   (value["now"] as? Double ?? 0) > 1_000_000_000_000
             else { throw LumaError("Worker clock/vector values were not returned after the host write: \(Safety.json(layer))") }
+        }
+        try await run("paused-startup-settles", code: clock, enabled: true, pauseImmediately: true) { host in
+            let layer = try await host.editorLayerProperties(id: "1") ?? [:]
+            guard let origin = layer["origin"] as? [NSNumber], origin.first?.doubleValue == 123,
+                  let text = layer["text"] as? String, let bytes = text.data(using: .utf8),
+                  let value = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+                  value["clockOK"] as? Bool == true else {
+                throw LumaError("An immediately paused scene froze before its initial SceneScript update reached the renderer: \(Safety.json(layer))")
+            }
         }
         try await run("review-source-changed-after-review", code: clock, enabled: true, changedAfterReview: true, expectedDiagnostic: "source changed")
         try await run("mixed-text-object-updates", code: clock, enabled: true, objectScript: "export function update(value) { return value; }")

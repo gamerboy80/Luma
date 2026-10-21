@@ -3,6 +3,19 @@ import AVFoundation
 import Combine
 import CryptoKit
 
+/// Removes settings used by the retired private-SkyLight live overlay. Luma no
+/// longer creates windows in authenticated lock-screen spaces.
+enum LockScreenOverlayMigration {
+    static let legacyKeys = [
+        "luma.experimentalLockOverlay.enabled",
+        "luma.experimentalLockOverlay.wallpaperID"
+    ]
+
+    static func retireLegacySettings(defaults: UserDefaults = .standard) {
+        for key in legacyKeys { defaults.removeObject(forKey: key) }
+    }
+}
+
 // Changes only Luma's catalog records, preserving Apple and other apps' entries.
 enum NativeCatalog {
     static let categoryID = "D839C508-3E1F-4A1B-98DB-64485752C810"

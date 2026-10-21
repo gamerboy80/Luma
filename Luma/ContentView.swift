@@ -40,7 +40,7 @@ struct ContentView: View {
                     case .workshop: WorkshopView(workshop:model.workshop,steam:model.steam,library:model.library)
                     case .displays: DisplaysView(library:model.library,desktop:model.desktop)
                     case .playlists: PlaylistView(library:model.library,desktop:model.desktop)
-                    case .lockscreen: LockScreenView(model:model,library:model.library,native:model.native,overlay:model.lockOverlay)
+                    case .lockscreen: LockScreenView(model:model,library:model.library,native:model.native)
                     case .settings: PreferencesView(model:model,library:model.library)
                     }
                 }.frame(maxWidth:.infinity,maxHeight:.infinity)

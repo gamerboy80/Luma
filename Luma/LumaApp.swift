@@ -68,10 +68,10 @@ struct ClearDataPlan {
     let workshop = WorkshopService()
     let steam = SteamCMD()
     let native: NativeLockScreen
-    let lockOverlay: ExperimentalLockScreenOverlay
     let wallperVideos: WallperVideosCatalog
     private var assetsAccess: URL?
     init() {
+        LockScreenOverlayMigration.retireLegacySettings()
         LaunchAtLoginBaseline.captureIfNeeded()
         let library = LibraryStore(); self.library = library
         wallperVideos = WallperVideosCatalog()
@@ -82,7 +82,6 @@ struct ClearDataPlan {
             if url.startAccessingSecurityScopedResource() { assetsAccess = url }
             desktop.assetsURL = url
         }
-        lockOverlay = ExperimentalLockScreenOverlay(library: library, assets: { desktop.assetsURL })
         SceneMediaProvider.shared.startSavedSource()
         steam.downloaded = { [weak self] folder, id in
             guard let self else { throw LumaError("Luma closed before the downloaded wallpaper could be imported.") }
@@ -162,7 +161,6 @@ struct ClearDataPlan {
         if let issue = desktop.clearDataPreflightError {
             restore.append("Clear Data will abort before changing system wallpapers because the desktop-still ownership record cannot be verified: \(issue)")
         }
-        if lockOverlay.enabled { restore.append("Stop Luma's experimental lock-screen windows and remove the private SkyLight space.") }
         if let login = LaunchAtLoginBaseline.clearDataDescription { restore.append(login) }
         if restore.isEmpty { restore.append("No recorded desktop image, native wallpaper selection, or launch-at-login change needs restoring.") }
         restore.append("Release Luma's temporary single-instance lock as the app quits. Its empty marker stays in macOS temporary storage to prevent another launch racing shutdown; macOS cleans temporary files.")
@@ -183,7 +181,6 @@ struct ClearDataPlan {
         desktop.beginClearData()
         SceneMediaProvider.shared.stop(clearPreference: true)
         do {
-            try lockOverlay.stopForClearData()
             try native.restoreManagedChangesForClearData()
             try native.removeStaticFallback()
             try editorProjects.clearManagedProjects()
@@ -202,7 +199,7 @@ struct ClearDataPlan {
             throw error
         }
     }
-    func shutdown() { SceneMediaProvider.shared.stop(); lockOverlay.shutdown(); desktop.shutdown(); steam.cancel(); native.cancel(); assetsAccess?.stopAccessingSecurityScopedResource() }
+    func shutdown() { SceneMediaProvider.shared.stop(); desktop.shutdown(); steam.cancel(); native.cancel(); assetsAccess?.stopAccessingSecurityScopedResource() }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {

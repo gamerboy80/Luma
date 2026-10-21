@@ -22,6 +22,17 @@ import AVFoundation
         func rejects(_ body: () throws -> Void) throws {
             do { try body() } catch { assertions += 1; return }; throw LumaError("FAILED: unsafe input was accepted")
         }
+        currentPhase = "retired lock-screen overlay migration"
+        let overlayDefaultsName = "dev.patrick.Luma.LockOverlayMigrationTests.\(UUID().uuidString)"
+        guard let overlayDefaults = UserDefaults(suiteName: overlayDefaultsName) else {
+            throw LumaError("Could not create isolated defaults for the lock-screen overlay migration test.")
+        }
+        defer { overlayDefaults.removePersistentDomain(forName: overlayDefaultsName) }
+        overlayDefaults.set(true, forKey: "luma.experimentalLockOverlay.enabled")
+        overlayDefaults.set(UUID().uuidString, forKey: "luma.experimentalLockOverlay.wallpaperID")
+        LockScreenOverlayMigration.retireLegacySettings(defaults: overlayDefaults)
+        try check(LockScreenOverlayMigration.legacyKeys.allSatisfy { overlayDefaults.object(forKey: $0) == nil },
+                  "upgrading retires the saved private overlay toggle and wallpaper selection")
         currentPhase = "display adjustment geometry and draft ownership"
         let landscape = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let square = CGSize(width: 1000, height: 1000)

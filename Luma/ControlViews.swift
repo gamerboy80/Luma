@@ -62,47 +62,16 @@ struct LockScreenView:View {
     let model:AppModel
     @ObservedObject var library:LibraryStore
     @ObservedObject var native:NativeLockScreen
-    @ObservedObject var overlay:ExperimentalLockScreenOverlay
     @State private var selection:UUID?
-    @State private var overlaySelection:UUID?
     @State private var preview:LockPreview?
     private enum LockPreview:Identifiable {
         case wallpaper(Wallpaper), still(URL)
         var id:String { switch self { case .wallpaper(let wallpaper): "wallpaper-\(wallpaper.id)"; case .still(let url): "still-\(url.path)" } }
     }
     private var selectedWallpaper:Wallpaper? { library.state.wallpapers.first(where:{$0.id == selection}) }
-    private var selectedOverlayWallpaper:Wallpaper? { library.state.wallpapers.first(where:{$0.id == overlaySelection && $0.kind == .scene}) }
-    private var overlayScenes:[Wallpaper] { library.state.wallpapers.filter{$0.kind == .scene} }
     var body:some View {
         Form {
-            Section {Label("Beyond the desktop.",systemImage:"lock.display").font(.title.bold());Text("Try an experimental live scene overlay at screen lock, or prepare a static image for System Settings. macOS does not provide a supported API to set a lock-screen-only image separately from the desktop.").foregroundStyle(.secondary)}
-            Section("Live Scene Overlay · Experimental") {
-                if overlayScenes.isEmpty {
-                    ContentUnavailableView("No scenes in your library",systemImage:"rectangle.stack.badge.play",description:Text("Import a Wallpaper Engine scene before enabling the live lock-screen overlay."))
-                        .frame(minHeight:100)
-                } else {
-                    Picker("Scene",selection:$overlaySelection) {
-                        Text("Choose a scene").tag(nil as UUID?)
-                        ForEach(overlayScenes) { wallpaper in Text(wallpaper.title).tag(Optional(wallpaper.id)) }
-                    }
-                    .disabled(overlay.enabled)
-                }
-                Toggle("Enable live lock-screen overlay",isOn:Binding(get:{overlay.enabled},set:{enabled in
-                    if enabled {
-                        guard let wallpaper=selectedOverlayWallpaper else { library.error="Choose a Wallpaper Engine scene in the Live Scene Overlay section first.";return }
-                        overlay.enable(for:wallpaper)
-                    } else { overlay.disable() }
-                })).disabled(overlaySelection == nil && !overlay.enabled)
-                HStack {
-                    Button("Preview Scene") { if let wallpaper=selectedOverlayWallpaper { preview = .wallpaper(wallpaper) } }
-                        .disabled(selectedOverlayWallpaper == nil)
-                    Button("Disable Overlay",role:.destructive) { overlay.disable() }.disabled(!overlay.enabled)
-                }
-                Text(overlay.status).font(.caption).textSelection(.enabled)
-                if !overlay.details.isEmpty { Text(overlay.details).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
-                Text("This uses private SkyLight window and space APIs. macOS can change or block them, and WebKit/WebGL animation may pause or disappear while locked. Luma only enables it when the required APIs resolve; lock, sleep, wake, disable, and normal app exit each stop or resume the renderer and remove the temporary space.").font(.caption).foregroundStyle(.secondary)
-                Text("SceneScript keeps the existing Review Scripts approval and Run SceneScript toggle. A content change rebuilds the renderer, which rechecks the approved fingerprint before executing scripts.").font(.caption).foregroundStyle(.secondary)
-            }
+            Section {Label("Lock Screen wallpapers, managed by macOS.",systemImage:"lock.display").font(.title.bold());Text("Luma no longer puts a floating window over the lock screen. Private SkyLight spaces cannot guarantee that a wallpaper window stays behind the password field, user-switching controls, and menu bar, so the live overlay has been removed. Use macOS’s wallpaper system below; macOS remains responsible for the login interface.").foregroundStyle(.secondary)}
             Section("Static Fallback") {
                 Button("Prepare Static Fallback…") {
                     if let wallpaper=selectedWallpaper { native.prepareStaticFallback(wallpaper,assets:model.desktop.assetsURL) }
@@ -126,7 +95,7 @@ struct LockScreenView:View {
                 Stepper("Scene loop: \(native.sceneSeconds) seconds",value:$native.sceneSeconds,in:5...120,step:5)
                 Text("Exported scenes preserve their rendered appearance. Cursor interaction, clocks, and audio response are frozen into the recorded loop; a seamless boundary depends on the scene.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Also update the native wallpaper selection",isOn:$native.selectAutomatically)
-                Text("When macOS links the desktop and idle wallpaper, this also changes the native desktop still. Luma preserves that link and unrelated settings. Leave this off to select the Luma collection in System Settings yourself.").font(.caption).foregroundStyle(.secondary)
+                Text("When enabled, Luma saves the current macOS wallpaper selection and selects its new collection. If the selection still matches Luma’s change, Restore Previous Wallpaper returns the saved selection. macOS may link the lock-screen/screen-saver choice to the desktop, so this can temporarily change the desktop too. Leave it off to choose the Luma collection yourself in System Settings; manual selection cannot be automatically rolled back by Luma.").font(.caption).foregroundStyle(.secondary)
                 HStack {Button("Connect Wallpaper Folder…"){native.chooseRoot()}.disabled(native.busy);Spacer();Button("Install for Lock Screen…"){if let wallpaper=library.state.wallpapers.first(where:{$0.id == selection}){native.install(wallpaper,assets:model.desktop.assetsURL)}}.buttonStyle(.borderedProminent).tint(tintColor).disabled(selection == nil || native.busy)}
                 if native.busy {ProgressView(value:native.progress);Button("Cancel"){native.cancel()}}
                 Text(native.status).font(.caption).textSelection(.enabled)
@@ -134,18 +103,11 @@ struct LockScreenView:View {
             }
             Section("Compatibility & Recovery") {
                 Text("Requires macOS 26 or newer. This integration uses the Aerials catalog format, which Apple does not document as a custom wallpaper API. Luma verifies HEVC temporal groups, uses fresh asset IDs, and backs up the catalog before changing it.").font(.caption).foregroundStyle(.secondary)
-                Text("The older Aerial collection route remains separate from the live overlay and static PNG fallback. macOS controls wallpaper motion and sleep; FileVault's preboot login screen is separate.").font(.caption).foregroundStyle(.secondary)
+                Text("This uses macOS’s undocumented Aerial wallpaper catalog format, not a supported custom wallpaper API. The system-managed collection is the safer available route because macOS owns its window ordering. FileVault’s preboot login screen is separate. A custom ScreenSaver plug-in is another public-API option for the idle screen-saver phase, but it is not the authenticated lock-screen wallpaper and would need a separately installed module.").font(.caption).foregroundStyle(.secondary)
                 HStack {Button("Open Wallpaper Settings"){native.openSettings()};Button("Reveal Backups"){NSWorkspace.shared.open(library.root.appendingPathComponent("NativeBackups"))};Spacer();Button("Restore Previous Wallpaper & Remove Luma Collection",role:.destructive){native.removeInstalled()}.disabled(native.busy || !native.hasManagedChanges)}
                 Text("If macOS keeps an old catalog in memory, log out and back in after installing. Luma does not repeatedly restart wallpaper services or override a later choice made in System Settings.").font(.caption).foregroundStyle(.secondary)
             }
-        }.formStyle(.grouped).onAppear {
-            if let id=overlay.wallpaperID {
-                overlaySelection=id
-                selection=id
-            } else if overlaySelection == nil {
-                overlaySelection=overlayScenes.first?.id
-            }
-        }
+        }.formStyle(.grouped)
             .sheet(item:$preview) { item in
                 switch item {
                 case .wallpaper(let wallpaper): WallpaperPreview(model:model,wallpaper:wallpaper).frame(minWidth:720,minHeight:420).padding(18)
