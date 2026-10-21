@@ -27,7 +27,10 @@ import AVFoundation
         let resources=URL(fileURLWithPath:CommandLine.arguments[1])
         let host=SceneHost(folder:root,assets:nil,wallpaper:wallpaper,configuration:DisplayConfiguration(),preferences:AppPreferences(),resources:resources)
         let window=NSWindow(contentRect:CGRect(x:0,y:0,width:320,height:180),styleMask:.borderless,backing:.buffered,defer:false)
-        window.isReleasedWhenClosed=false;window.ignoresMouseEvents=true;window.contentView=host.webView;window.orderBack(nil)
+        // Keep WebKit's rendering surface visible for the full regression run.
+        // A window ordered behind the desktop can have its web content process
+        // reclaimed while capture/export is exercising the scene renderer.
+        window.isReleasedWhenClosed=false;window.ignoresMouseEvents=true;window.contentView=host.webView;window.orderFrontRegardless()
         defer {host.stop();window.close()}
         var error:String?
         host.failed={error=$0};host.diagnostic={print("Scene diagnostic:",$0)}

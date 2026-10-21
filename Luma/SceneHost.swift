@@ -142,8 +142,13 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
     func pointer(x: Double, y: Double) { guard didBecomeReady else { return }; webView.evaluateJavaScript("window.wallpaper?.pushPointer(\(x),\(y),0)", completionHandler: nil) }
     func capture(time: Double, width: Int, height: Int) async throws -> Data {
         guard didBecomeReady else { throw LumaError("Wait for the scene to finish loading before exporting.") }
-        let value = try await webView.callAsyncJavaScript("return await window.lumaCapture(time, width, height)", arguments: ["time":time,"width":width,"height":height], in: nil, contentWorld: .page)
-        guard let string = value as? String, let comma = string.firstIndex(of: ","), let data = Data(base64Encoded: String(string[string.index(after: comma)...])) else { throw LumaError("The renderer could not capture this scene.") }
+        let value = try await webView.callAsyncJavaScript("try { return {ok:true, data:await window.lumaCapture(time,width,height)} } catch (error) { return {ok:false, error:String(error?.stack || error?.message || error)} }", arguments: ["time":time,"width":width,"height":height], in: nil, contentWorld: .page)
+        guard let result = value as? [String: Any], result["ok"] as? Bool == true,
+              let string = result["data"] as? String, let comma = string.firstIndex(of: ","),
+              let data = Data(base64Encoded: String(string[string.index(after: comma)...])) else {
+            let detail = (value as? [String: Any])?["error"] as? String
+            throw LumaError(detail.map { "The scene renderer could not capture this frame: \($0.prefix(1_500))" } ?? "The renderer returned an invalid scene capture.")
+        }
         return data
     }
     func editorAvailable() async -> Bool {
