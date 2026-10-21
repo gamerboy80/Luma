@@ -132,29 +132,75 @@ struct TemporalEncoder {
     static func export(host: SceneHost, output: URL, seconds: Int, fps: Int, width: Int, height: Int, progress: (Double) -> Void) async throws {
         let writer = try AVAssetWriter(outputURL: output, fileType: .mov)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey:width, AVVideoHeightKey:height])
-        input.expectsMediaDataInRealTime = false
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String:kCVPixelFormatType_32BGRA,kCVPixelBufferWidthKey as String:width,kCVPixelBufferHeightKey as String:height,kCVPixelBufferCGImageCompatibilityKey as String:true,kCVPixelBufferCGBitmapContextCompatibilityKey as String:true])
         guard writer.canAdd(input) else { throw LumaError("The scene video encoder is unavailable.") }
-        writer.add(input); guard writer.startWriting() else { throw writer.error ?? LumaError("Could not start recording.") }; writer.startSession(atSourceTime: .zero)
         host.setPlaying(false)
         do {
-            for frame in 0..<(seconds * fps) {
-                try Task.checkCancellation()
-                let data = try await host.capture(time: Double(frame) / Double(fps), width: width, height: height)
-                guard let image = NSBitmapImageRep(data: data)?.cgImage, let pool = adaptor.pixelBufferPool else { throw LumaError("This wallpaper cannot export frames.") }
-                var pixel: CVPixelBuffer?
-                guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixel) == kCVReturnSuccess, let pixel else { throw LumaError("Could not allocate a video frame.") }
-                CVPixelBufferLockBaseAddress(pixel, []); defer { CVPixelBufferUnlockBaseAddress(pixel, []) }
-                guard let context = CGContext(data: CVPixelBufferGetBaseAddress(pixel), width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixel), space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { throw LumaError("Could not draw a scene frame.") }
-                context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-                let deadline = Date().addingTimeInterval(15)
-                while !input.isReadyForMoreMediaData { try Task.checkCancellation(); guard writer.status == .writing, Date() < deadline else { throw writer.error ?? LumaError("Video recording stalled.") }; try await Task.sleep(for: .milliseconds(3)) }
-                guard adaptor.append(pixel, withPresentationTime: CMTime(value: Int64(frame), timescale: Int32(fps))) else { throw writer.error ?? LumaError("Could not encode this scene frame.") }
-                progress(Double(frame + 1) / Double(seconds * fps))
+            if #available(macOS 27.0, *) {
+                let attributes = CVPixelBufferCreationAttributes(
+                    pixelFormatType: CVPixelFormatType(rawValue: kCVPixelFormatType_32BGRA),
+                    size: CVImageSize(width: width, height: height)
+                )
+                let receiver = writer.inputPixelBufferReceiver(for: input, pixelBufferAttributes: attributes)
+                try writer.start()
+                writer.startSession(atSourceTime: .zero)
+                let poolAttributes: [String: Any] = [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                    kCVPixelBufferWidthKey as String: width,
+                    kCVPixelBufferHeightKey as String: height,
+                    kCVPixelBufferCGImageCompatibilityKey as String: true,
+                    kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
+                ]
+                var pool: CVPixelBufferPool?
+                guard CVPixelBufferPoolCreate(nil, nil, poolAttributes as CFDictionary, &pool) == kCVReturnSuccess,
+                      let pool else { throw LumaError("This wallpaper cannot allocate export frames.") }
+                for frame in 0..<(seconds * fps) {
+                    try Task.checkCancellation()
+                    let data = try await host.capture(time: Double(frame) / Double(fps), width: width, height: height)
+                    let pixel = try makePixelBuffer(from: data, pool: pool, width: width, height: height)
+                    let readOnlyPixel = CVReadOnlyPixelBuffer(unsafeBuffer: pixel)
+                    try await receiver.append(readOnlyPixel, with: CMTime(value: Int64(frame), timescale: Int32(fps)))
+                    progress(Double(frame + 1) / Double(seconds * fps))
+                }
+                receiver.finish()
+            } else {
+                input.expectsMediaDataInRealTime = false
+                let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+                    assetWriterInput: input,
+                    sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String:kCVPixelFormatType_32BGRA,kCVPixelBufferWidthKey as String:width,kCVPixelBufferHeightKey as String:height,kCVPixelBufferCGImageCompatibilityKey as String:true,kCVPixelBufferCGBitmapContextCompatibilityKey as String:true]
+                )
+                writer.add(input)
+                guard writer.startWriting() else { throw writer.error ?? LumaError("Could not start recording.") }
+                writer.startSession(atSourceTime: .zero)
+                guard let pool = adaptor.pixelBufferPool else { throw LumaError("This wallpaper cannot export frames.") }
+                for frame in 0..<(seconds * fps) {
+                    try Task.checkCancellation()
+                    let data = try await host.capture(time: Double(frame) / Double(fps), width: width, height: height)
+                    let pixel = try makePixelBuffer(from: data, pool: pool, width: width, height: height)
+                    let deadline = Date().addingTimeInterval(15)
+                    while !input.isReadyForMoreMediaData {
+                        try Task.checkCancellation()
+                        guard writer.status == .writing, Date() < deadline else { throw writer.error ?? LumaError("Video recording stalled.") }
+                        try await Task.sleep(for: .milliseconds(3))
+                    }
+                    guard adaptor.append(pixel, withPresentationTime: CMTime(value: Int64(frame), timescale: Int32(fps))) else { throw writer.error ?? LumaError("Could not encode this scene frame.") }
+                    progress(Double(frame + 1) / Double(seconds * fps))
+                }
+                input.markAsFinished()
             }
-            input.markAsFinished(); await writer.finishWriting()
+            await writer.finishWriting()
             guard writer.status == .completed else { throw writer.error ?? LumaError("The scene video could not be completed.") }
         } catch { writer.cancelWriting(); try? FileManager.default.removeItem(at: output); throw error }
+    }
+
+    private static func makePixelBuffer(from data: Data, pool: CVPixelBufferPool, width: Int, height: Int) throws -> CVPixelBuffer {
+        guard let image = NSBitmapImageRep(data: data)?.cgImage else { throw LumaError("This wallpaper cannot export frames.") }
+        var pixelBuffer: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixelBuffer) == kCVReturnSuccess, let pixelBuffer else { throw LumaError("Could not allocate a video frame.") }
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+        guard let context = CGContext(data: CVPixelBufferGetBaseAddress(pixelBuffer), width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer), space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { throw LumaError("Could not draw a scene frame.") }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return pixelBuffer
     }
 }
 

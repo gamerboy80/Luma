@@ -95,14 +95,22 @@ import Foundation
     nonisolated static func metadataScript(for source: Source) -> String {
         // Target and code come from a closed enum, never from wallpaper content.
         let appName = source == .music ? "Music" : "Spotify"
-        let duration = source == .spotify ? "((duration of t) / 1000.0)" : "(duration of t)"
         return """
         with timeout of 3 seconds
             tell application "\(appName)"
-                set s to player state as text
+                -- Raw Apple Event property codes work across dictionary versions
+                -- and avoid relying on terminology being installed at compile time.
+                set rawState to «property pPlS»
+                if rawState is «constant ePlSkPSS» then
+                    set s to "stopped"
+                else if rawState is «constant ePlSkPSP» or rawState is «constant ePlSkPSF» or rawState is «constant ePlSkPSR» then
+                    set s to "playing"
+                else
+                    set s to "paused"
+                end if
                 if s is "stopped" then return {"stopped", "", "", "", "", 0, 0, 0}
-                set t to current track
-                return {s, name of t, artist of t, album of t, album artist of t, player position, \(duration), track number of t}
+                set t to «property pTrk»
+                return {s, «property pnam» of t, «property pArt» of t, «property pAlb» of t, «property pAlA» of t, «property pPos», «property pDur» of t, «property pTrN» of t}
             end tell
         end timeout
         """

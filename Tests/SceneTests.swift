@@ -56,6 +56,9 @@ import AVFoundation
         try await Task.sleep(for: .milliseconds(100))
         let frame=try await host.capture(time:0,width:320,height:180)
         guard let bitmap=NSBitmapImageRep(data:frame),bitmap.pixelsWide == 320,bitmap.pixelsHigh == 180 else {throw LumaError("Scene frame dimensions are wrong")}
+        _ = try await host.webView.callAsyncJavaScript("HTMLCanvasElement.prototype.toBlob=function(callback){callback(null)}; return true", arguments: [:], in: nil, contentWorld: .page)
+        let fallbackFrame = try await host.capture(time: 0.1, width: 320, height: 180)
+        guard let fallbackBitmap = NSBitmapImageRep(data: fallbackFrame), fallbackBitmap.pixelsWide == 320, fallbackBitmap.pixelsHigh == 180 else { throw LumaError("Scene capture did not fall back to a data URL when canvas.toBlob returned null.") }
         var bright=0
         for y in stride(from:0,to:180,by:3){for x in stride(from:0,to:320,by:3){if let color=bitmap.colorAt(x:x,y:y)?.usingColorSpace(.deviceRGB),color.greenComponent>0.2 {bright += 1}}}
         guard bright>10 else {throw LumaError("The scene capture contained no rendered text")}

@@ -18,10 +18,13 @@ import AVFoundation
         let invalidTrack = SceneMediaProvider.decode(["unknown", "Title", "", "", "", "nan", "inf", "-7"])
         try check(invalidTrack.position == 0 && invalidTrack.duration == 0 && invalidTrack.trackIndex == 0 && invalidTrack.state == "stopped", "metadata rejects nonfinite or negative values")
         try check(JSONSerialization.isValidJSONObject(track.json), "track data is safe for the script snapshot")
-        var scriptError: NSDictionary?
-        let query = NSAppleScript(source: SceneMediaProvider.metadataScript(for: .music))
-        let queryCompiles = query?.compileAndReturnError(&scriptError) == true
-        try check(queryCompiles, "fixed Music metadata query compiles without executing automation: \(scriptError ?? [:])")
+        for source in [SceneMediaProvider.Source.music, .spotify] {
+            var scriptError: NSDictionary?
+            let query = NSAppleScript(source: SceneMediaProvider.metadataScript(for: source))
+            let queryCompiles = query?.compileAndReturnError(&scriptError) == true
+            try check(queryCompiles, "fixed \(source.title) metadata query compiles without executing automation: \(scriptError ?? [:])")
+        }
+        try check(!SceneMediaProvider.metadataScript(for: .spotify).contains("/ 1000.0"), "Spotify duration is kept in the seconds used by its Apple Event dictionary")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("LumaTests-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

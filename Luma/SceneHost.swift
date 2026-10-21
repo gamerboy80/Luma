@@ -142,7 +142,7 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
     func pointer(x: Double, y: Double) { guard didBecomeReady else { return }; webView.evaluateJavaScript("window.wallpaper?.pushPointer(\(x),\(y),0)", completionHandler: nil) }
     func capture(time: Double, width: Int, height: Int) async throws -> Data {
         guard didBecomeReady else { throw LumaError("Wait for the scene to finish loading before exporting.") }
-        let value = try await webView.callAsyncJavaScript("try { return {ok:true, data:await window.lumaCapture(time,width,height)} } catch (error) { return {ok:false, error:String(error?.stack || error?.message || error)} }", arguments: ["time":time,"width":width,"height":height], in: nil, contentWorld: .page)
+        let value = try await webView.callAsyncJavaScript("try { return {ok:true, data:await window.lumaCapture(time,width,height)} } catch (error) { const message=String(error?.message || error); const stack=typeof error?.stack==='string' ? error.stack : ''; return {ok:false, error:stack ? message+'\\n'+stack : message} }", arguments: ["time":time,"width":width,"height":height], in: nil, contentWorld: .page)
         guard let result = value as? [String: Any], result["ok"] as? Bool == true,
               let string = result["data"] as? String, let comma = string.firstIndex(of: ","),
               let data = Data(base64Encoded: String(string[string.index(after: comma)...])) else {
