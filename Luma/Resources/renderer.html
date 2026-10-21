@@ -14,6 +14,17 @@ window.lumaCapture=async(time,width,height)=>{
  if(blob)return await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(blob)});
  return canvas.toDataURL('image/png');
 };
+window.lumaCaptureBridge=async(time,width,height)=>{
+ try{
+  const data=await window.lumaCapture(time,width,height);
+  if(typeof data!=='string')return JSON.stringify({ok:false,error:`Capture returned ${data===null?'null':typeof data}, expected a PNG data URL.`});
+  return JSON.stringify({ok:true,data});
+ }catch(error){
+  const message=String(error?.message||error);
+  const stack=typeof error?.stack==='string'?error.stack:'';
+  return JSON.stringify({ok:false,error:stack?`${message}\n${stack}`:message});
+ }
+};
 window.lumaEditorAvailable=()=>!!WebWallGL.editorOf(window.wallpaper);
 window.lumaEditorLayers=()=>WebWallGL.editorOf(window.wallpaper)?.getLayers()||[];
 window.lumaEditorLayerProps=id=>WebWallGL.editorOf(window.wallpaper)?.getLayerProps(id)||null;

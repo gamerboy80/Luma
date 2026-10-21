@@ -102,6 +102,17 @@ import CryptoKit
         let fallbackFrame = try await host.capture(time: 0.1, width: 320, height: 180)
         guard let fallbackBitmap = NSBitmapImageRep(data: fallbackFrame) else { throw LumaError("Scene capture did not fall back to a decodable data URL when canvas.toBlob returned null.") }
         guard fallbackBitmap.pixelsWide == 320, fallbackBitmap.pixelsHigh == 180 else { throw LumaError("Data URL fallback frame dimensions are wrong: got \(fallbackBitmap.pixelsWide)×\(fallbackBitmap.pixelsHigh), expected 320×180.") }
+        _ = try await host.webView.callAsyncJavaScript("window.__lumaCaptureForBridgeTest=window.lumaCapture;window.lumaCapture=async()=>null;return true", arguments: [:], in: nil, contentWorld: .page)
+        var captureDiagnostic = ""
+        do {
+            _ = try await host.capture(time: 0.1, width: 320, height: 180)
+        } catch {
+            captureDiagnostic = error.localizedDescription
+        }
+        _ = try await host.webView.callAsyncJavaScript("window.lumaCapture=window.__lumaCaptureForBridgeTest;delete window.__lumaCaptureForBridgeTest;return true", arguments: [:], in: nil, contentWorld: .page)
+        guard captureDiagnostic.contains("Capture returned null") else {
+            throw LumaError("Scene capture bridge did not preserve its renderer error details: \(captureDiagnostic.isEmpty ? "capture unexpectedly succeeded" : captureDiagnostic).")
+        }
         var bright=0
         for y in stride(from:0,to:180,by:3){for x in stride(from:0,to:320,by:3){if let color=bitmap.colorAt(x:x,y:y)?.usingColorSpace(.deviceRGB),color.greenComponent>0.2 {bright += 1}}}
         guard bright>10 else {throw LumaError("The scene capture contained no rendered text")}

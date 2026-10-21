@@ -234,12 +234,18 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
               width * height <= 16_777_216 else {
             throw LumaError("Scene capture dimensions must be between 1 and 8192 pixels, with no more than 16 megapixels.")
         }
-        let value = try await webView.callAsyncJavaScript("try { return {ok:true, data:await window.lumaCapture(time,width,height)} } catch (error) { const message=String(error?.message || error); const stack=typeof error?.stack==='string' ? error.stack : ''; return {ok:false, error:stack ? message+'\\n'+stack : message} }", arguments: ["time":time,"width":width,"height":height], in: nil, contentWorld: .page)
-        guard let result = value as? [String: Any], result["ok"] as? Bool == true,
+        let value = try await webView.callAsyncJavaScript("return await window.lumaCaptureBridge(time,width,height)", arguments: ["time":time,"width":width,"height":height], in: nil, contentWorld: .page)
+        guard let serialized = value as? String,
+              let resultData = serialized.data(using: .utf8),
+              let result = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any] else {
+            let resultType = value.map { String(reflecting: type(of: $0)) } ?? "nil"
+            throw LumaError("The renderer returned an unreadable scene capture response (\(resultType)).")
+        }
+        guard result["ok"] as? Bool == true,
               let string = result["data"] as? String, string.hasPrefix("data:image/png;base64,"),
               let comma = string.firstIndex(of: ",") else {
-            let detail = (value as? [String: Any])?["error"] as? String
-            throw LumaError(detail.map { "The scene renderer could not capture this frame: \($0.prefix(1_500))" } ?? "The renderer returned an invalid scene capture.")
+            let detail = result["error"] as? String
+            throw LumaError(detail.map { "The scene renderer could not capture this frame: \($0.prefix(1_500))" } ?? "The renderer returned an invalid scene capture payload.")
         }
         let base64 = string[string.index(after: comma)...]
         guard base64.utf8.count <= Self.maxCaptureBase64Characters else { throw LumaError("The scene capture exceeds Luma's 96 MiB image limit.") }
