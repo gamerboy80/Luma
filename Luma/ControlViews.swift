@@ -88,25 +88,38 @@ struct LockScreenView:View {
     @ObservedObject var native:NativeLockScreen
     @ObservedObject var overlay:ExperimentalLockScreenOverlay
     @State private var selection:UUID?
+    @State private var overlaySelection:UUID?
     @State private var preview:LockPreview?
     private enum LockPreview:Identifiable {
         case wallpaper(Wallpaper), still(URL)
         var id:String { switch self { case .wallpaper(let wallpaper): "wallpaper-\(wallpaper.id)"; case .still(let url): "still-\(url.path)" } }
     }
     private var selectedWallpaper:Wallpaper? { library.state.wallpapers.first(where:{$0.id == selection}) }
+    private var selectedOverlayWallpaper:Wallpaper? { library.state.wallpapers.first(where:{$0.id == overlaySelection && $0.kind == .scene}) }
+    private var overlayScenes:[Wallpaper] { library.state.wallpapers.filter{$0.kind == .scene} }
     var body:some View {
         Form {
             Section {Label("Beyond the desktop.",systemImage:"lock.display").font(.title.bold());Text("Try an experimental live scene overlay at screen lock, or prepare a static image for System Settings. macOS does not provide a supported API to set a lock-screen-only image separately from the desktop.").foregroundStyle(.secondary)}
             Section("Live Scene Overlay · Experimental") {
+                if overlayScenes.isEmpty {
+                    ContentUnavailableView("No scenes in your library",systemImage:"rectangle.stack.badge.play",description:Text("Import a Wallpaper Engine scene before enabling the live lock-screen overlay."))
+                        .frame(minHeight:100)
+                } else {
+                    Picker("Scene",selection:$overlaySelection) {
+                        Text("Choose a scene").tag(nil as UUID?)
+                        ForEach(overlayScenes) { wallpaper in Text(wallpaper.title).tag(Optional(wallpaper.id)) }
+                    }
+                    .disabled(overlay.enabled)
+                }
                 Toggle("Enable live lock-screen overlay",isOn:Binding(get:{overlay.enabled},set:{enabled in
                     if enabled {
-                        guard let wallpaper=selectedWallpaper else { library.error="Choose a Wallpaper Engine scene first.";return }
+                        guard let wallpaper=selectedOverlayWallpaper else { library.error="Choose a Wallpaper Engine scene in the Live Scene Overlay section first.";return }
                         overlay.enable(for:wallpaper)
                     } else { overlay.disable() }
-                })).disabled(selection == nil && !overlay.enabled)
+                })).disabled(overlaySelection == nil && !overlay.enabled)
                 HStack {
-                    Button("Preview Scene") { if let wallpaper=selectedWallpaper { preview = .wallpaper(wallpaper) } }
-                        .disabled(selectedWallpaper?.kind != .scene)
+                    Button("Preview Scene") { if let wallpaper=selectedOverlayWallpaper { preview = .wallpaper(wallpaper) } }
+                        .disabled(selectedOverlayWallpaper == nil)
                     Button("Disable Overlay",role:.destructive) { overlay.disable() }.disabled(!overlay.enabled)
                 }
                 Text(overlay.status).font(.caption).textSelection(.enabled)
@@ -148,7 +161,14 @@ struct LockScreenView:View {
                 HStack {Button("Open Wallpaper Settings"){native.openSettings()};Button("Reveal Backups"){NSWorkspace.shared.open(library.root.appendingPathComponent("NativeBackups"))};Spacer();Button("Restore Previous Wallpaper & Remove Luma Collection",role:.destructive){native.removeInstalled()}.disabled(native.busy || !native.hasManagedChanges)}
                 Text("If macOS keeps an old catalog in memory, log out and back in after installing. Luma does not repeatedly restart wallpaper services or override a later choice made in System Settings.").font(.caption).foregroundStyle(.secondary)
             }
-        }.formStyle(.grouped).onAppear { if overlay.wallpaperID != nil { selection=overlay.wallpaperID } }
+        }.formStyle(.grouped).onAppear {
+            if let id=overlay.wallpaperID {
+                overlaySelection=id
+                selection=id
+            } else if overlaySelection == nil {
+                overlaySelection=overlayScenes.first?.id
+            }
+        }
             .sheet(item:$preview) { item in
                 switch item {
                 case .wallpaper(let wallpaper): WallpaperPreview(model:model,wallpaper:wallpaper).frame(minWidth:720,minHeight:420).padding(18)
