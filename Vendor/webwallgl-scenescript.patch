@@ -1,0 +1,3076 @@
+diff --git a/package.json b/package.json
+index b5ccc4f..d59f556 100644
+--- a/package.json
++++ b/package.json
+@@ -88,6 +88,7 @@
+     "vite": "^6.4.3"
+   },
+   "dependencies": {
+-    "mediabunny": "^1.56.0"
++    "mediabunny": "^1.56.0",
++    "ses": "2.3.0"
+   }
+ }
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 1a82447..d21d87c 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -11,6 +11,9 @@ importers:
+       mediabunny:
+         specifier: ^1.56.0
+         version: 1.56.0
++      ses:
++        specifier: 2.3.0
++        version: 2.3.0
+     devDependencies:
+       '@types/node':
+         specifier: ^26.4.0
+@@ -77,6 +80,15 @@ packages:
+     engines: {node: '>=14.14'}
+     hasBin: true
+ 
++  '@endo/cache-map@1.1.0':
++    resolution: {integrity: sha512-owFGshs/97PDw9oguZqU/px8Lv1d0KjAUtDUiPwKHNXRVUE/jyettEbRoTbNJR1OaI8biMn6bHr9kVJsOh6dXw==}
++
++  '@endo/env-options@1.1.11':
++    resolution: {integrity: sha512-p9OnAPsdqoX4YJsE98e3NBVhIr2iW9gNZxHhAI2/Ul5TdRfoOViItzHzTqrgUVopw6XxA1u1uS6CykLMDUxarA==}
++
++  '@endo/immutable-arraybuffer@2.0.0':
++    resolution: {integrity: sha512-xvfJvo4CgETh6UjSKwhNsFLZrqrTf2k4ZFpcprEN2UtCQRSOk+CcLP70kFbrOesB2Z/c1z9MaUZDS1JY6IlnUg==}
++
+   '@esbuild/aix-ppc64@0.25.0':
+     resolution: {integrity: sha512-O7vun9Sf8DFjH2UtqK8Ku3LkquL9SZL8OLY1T5NZkA34+wG3OQF7cl4Ql8vdNzM6fzBbYfLaiRLIOZ+2FOCgBQ==}
+     engines: {node: '>=18'}
+@@ -1384,6 +1396,9 @@ packages:
+     resolution: {integrity: sha512-8I8TjW5KMOKsZQTvoxjuSIa7foAwPWGOts+6o7sgjz41/qMD9VQHEDxi6PBvK2l0MXUmqZyNpUK+T2tQaaElvw==}
+     engines: {node: '>=10'}
+ 
++  ses@2.3.0:
++    resolution: {integrity: sha512-qd3iWzDqGKllI2FmExKsWLrJwt+6COWb8jUdzaCn8Cq5OTeoXdQ62Gn/xLy0GWLORC3du6yBAVe/V0B0dLVKew==}
++
+   shebang-command@2.0.0:
+     resolution: {integrity: sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA==}
+     engines: {node: '>=8'}
+@@ -1695,6 +1710,12 @@ snapshots:
+       - supports-color
+     optional: true
+ 
++  '@endo/cache-map@1.1.0': {}
++
++  '@endo/env-options@1.1.11': {}
++
++  '@endo/immutable-arraybuffer@2.0.0': {}
++
+   '@esbuild/aix-ppc64@0.25.0':
+     optional: true
+ 
+@@ -2951,6 +2972,12 @@ snapshots:
+       type-fest: 0.13.1
+     optional: true
+ 
++  ses@2.3.0:
++    dependencies:
++      '@endo/cache-map': 1.1.0
++      '@endo/env-options': 1.1.11
++      '@endo/immutable-arraybuffer': 2.0.0
++
+   shebang-command@2.0.0:
+     dependencies:
+       shebang-regex: 3.0.0
+diff --git a/renderer/src/api/mount.ts b/renderer/src/api/mount.ts
+index f167318..9e42975 100644
+--- a/renderer/src/api/mount.ts
++++ b/renderer/src/api/mount.ts
+@@ -105,6 +105,7 @@ async function resolveMountConfig(
+     loop: true,
+     canvas: el,
+     source: o.source,
++    generalSettings: o.generalSettings,
+     // 质量设置（抗锯齿/粒子/后处理档位）。原样透传：规范化在消费方做
+     // （scene-mount applyQuality / getQuality），这里不引依赖 —— 本函数会被
+     // verify-media 抽出来脱离 import 单独执行。
+@@ -617,6 +618,12 @@ export function createScene(
+       return { ...(rt.liveUserProps ?? {}) } as Record<string, PropertyValue>;
+     },
+ 
++    setGeneralSettings(settings) {
++      const value = { ...(settings ?? {}) };
++      currentOptions = { ...currentOptions, generalSettings: value };
++      rt.sceneCtl?.applyGeneralSettings?.(value);
++    },
++
+     // 宿主频谱源。只存引用，实际每帧拉取在 scene-mount 的渲染循环里。
+     // 与 __wp.setAudioBridge 同纪律：换场景不清空，装一次对之后所有场景生效
+     // （wireOptions 也只在选项里出现 audio 时才覆盖，见那里的说明）。
+diff --git a/renderer/src/api/types.ts b/renderer/src/api/types.ts
+index 349edca..a061af0 100644
+--- a/renderer/src/api/types.ts
++++ b/renderer/src/api/types.ts
+@@ -14,6 +14,13 @@ export type Fit = "cover" | "contain" | "stretch";
+  */
+ export type PropertyValue = boolean | number | string;
+ 
++/** General application settings exposed to SceneScript lifecycle hooks. */
++export type SceneGeneralSettings = {
++  /** BCP 47 language tag, normalized to lower case by Wallpaper Engine. */
++  language?: string;
++  [key: string]: unknown;
++};
++
+ /**
+  * 松散目录（源码工程）形态的场景资源读取器。
+  *
+@@ -399,6 +406,9 @@ export type MountOptions = {
+   /** 用户属性覆盖值（键为 project.json 里的属性名） */
+   properties?: Record<string, PropertyValue>;
+ 
++  /** SceneScript applyGeneralSettings payload. Defaults to the host locale. */
++  generalSettings?: SceneGeneralSettings;
++
+   /**
+    * 是否执行壁纸自带的 SceneScript（对象字段 / 文字 / 效果开关 / 材质常量脚本）。默认 true。
+    * 传 `false` 时一律不求值，字段停在 scene.json 的快照值。沙箱并非安全边界
+@@ -615,6 +625,9 @@ export type SceneInstance = {
+   /** 当前生效的属性值（扁平化后的 name → value） */
+   getProperties(): Record<string, PropertyValue>;
+ 
++  /** Update the general settings sent to SceneScript applyGeneralSettings hooks. */
++  setGeneralSettings(settings: SceneGeneralSettings): void;
++
+   /**
+    * 换音频频谱源。传 null 回落内置模拟源。
+    *
+diff --git a/renderer/src/scene-mount.ts b/renderer/src/scene-mount.ts
+index 7aa08cf..0498a33 100644
+--- a/renderer/src/scene-mount.ts
++++ b/renderer/src/scene-mount.ts
+@@ -48,6 +48,7 @@ import type {
+   Source,
+ } from "./api/types";
+ import { createLoopingVideo } from "./video-loop";
++import { SceneScriptRuntime } from "./scene-script-runtime";
+ import { SKIP_3D_MODELS, SKIP_COMPONENTS, SKIP_PARTICLES, SKIP_SCENE_EFFECTS, SKIP_TEXT, SYSTEM_FONT_FAMILIES, TEXT_EM_SCALE } from "./types";
+ import type { WallpaperConfig } from "./types";
+ import {
+@@ -128,6 +129,7 @@ const DEFAULT_MESH_LIGHT: {
+   base: [number, number, number];
+   add: [number, number, number];
+ } = { dir: [-0.4, 0.5, 0.77], base: [0.68, 0.68, 0.68], add: [0.52, 0.52, 0.52] };
++let nextSceneScriptGeneration = 1;
+ 
+ /** 编辑器自己的资产命名空间：`editor/gltf.ts` 的导入产物都写在 models|materials/editor/ 下。 */
+ function isEditorAssetPath(p: unknown): boolean {
+@@ -494,7 +496,9 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+     }
+   };
+   let pendingWire: Record<string, { value: unknown }> | null = null;
++  let pendingGeneralSettings: Record<string, unknown> | null = null;
+   let applyLiveImpl: ((wire: Record<string, { value: unknown }>) => void) | undefined;
++  let applyGeneralSettingsImpl: ((settings: Record<string, unknown>) => void) | undefined;
+   let pauseImpl: (() => void) | undefined;
+   let resumeImpl: (() => void) | undefined;
+   /** 遮挡暂停（V5）：与用户 pause 共用媒体停启，但不碰 rt.paused。装配期未就绪时静默。 */
+@@ -521,6 +525,11 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+       if (applyLiveImpl) applyLiveImpl(props);
+       else pendingWire = { ...(pendingWire || {}), ...props };
+     },
++    applyGeneralSettings(settings) {
++      const value = { ...(settings || {}) };
++      if (applyGeneralSettingsImpl) applyGeneralSettingsImpl(value);
++      else pendingGeneralSettings = value;
++    },
+     setQuality(q) {
+       rt.cfg.quality = { ...normalizeQuality(rt.cfg.quality), ...(q ?? {}) };
+       setQualityImpl?.(normalizeQuality(rt.cfg.quality));
+@@ -890,6 +899,23 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         hook(info);
+       }
+       const propSandboxes: any[] = [];
++      const applyGeneralSettingsToScripts = (settings: Record<string, unknown>) => {
++        for (const sandbox of propSandboxes) {
++          if (sandbox?.hasGeneralSettingsHook && typeof sandbox.applyGeneralSettings === "function") {
++            sandbox.applyGeneralSettings(settings);
++          }
++        }
++      };
++      applyGeneralSettingsImpl = applyGeneralSettingsToScripts;
++      (rt as any).applySceneGeneralSettings = applyGeneralSettingsToScripts;
++      const previousSceneCleanup = rt.sceneCleanup;
++      rt.sceneCleanup = () => {
++        for (const sandbox of new Set(propSandboxes)) {
++          try { sandbox?.destroy?.(); } catch { /* keep teardown moving */ }
++        }
++        previousSceneCleanup?.();
++        scriptRuntime?.dispose();
++      };
+       // M12 / W8 单脚本沙箱热替换（EDITOR-COMPLETION-PLAN §2 B3）。
+       //
+       // 现状：改脚本只能整场景重挂（第③档）。热替换要同时满足两条硬约束：
+@@ -947,8 +973,18 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         if (typeof script === "string" && script) skippedScripts++;
+         return null;
+       };
+-      const evalObjectScript: typeof wtext.evalObjectScript = scriptsOff ? skipScript : wtext.evalObjectScript;
+-      const evalTextScript: typeof wtext.evalTextScript = scriptsOff ? skipScript : wtext.evalTextScript;
++      const scriptRuntime = scriptsOff ? null : new SceneScriptRuntime({
++        generation: nextSceneScriptGeneration++,
++        layers: () => (scene.layers as any[]) || [],
++        onTimeout: ({ script, event, milliseconds }) => reportDiag(
++          rt, cfg, `SceneScript '${script}' timed out during ${event} after ${milliseconds} ms; scripts are disabled for this scene.`, "warn",
++        ),
++        onFailure: (message) => reportDiag(rt, cfg, message, "warn"),
++      });
++      const evalObjectScript: typeof wtext.evalObjectScript = scriptsOff ? skipScript : (code: any, properties: any, opts: any = {}) =>
++        wtext.evalObjectScript(code, properties, { ...opts, sceneScriptRuntime: scriptRuntime });
++      const evalTextScript: typeof wtext.evalTextScript = scriptsOff ? skipScript : (code: any, properties: any, opts: any = {}) =>
++        wtext.evalTextScript(code, properties, { ...opts, sceneScriptRuntime: scriptRuntime });
+       const scriptSlotHost: ScriptSlotHost = {
+         register: (sb) => propSandboxes.push(sb),
+         clearIssues: (layerId, target) => {
+@@ -4981,6 +5017,14 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+       // 纯逻辑（脚本沙箱求值 / 盒内排版 / 绘制）在 vendor we-scene render/text.js，
+       // 可被 scripts/verify-text.mjs 在 node 里对全库脚本离线校验。
+         const textWidgets: any[] = [];
++      // Shared by text scripts and object scripts. Text scripts are evaluated before the
++      // renderer scene API is assembled, but their init callbacks are deferred until after
++      // this object is populated.
++      let sceneApi: any = {};
++      let registerRuntimeTextWidget: ((layer: any) => void) | null = null;
++      let registerRuntimeTextHooks: ((layer: any, sandbox: any) => void) | null = null;
++      let setTextAnchor: ((layer: any, anchor: unknown) => void) | null = null;
++      let textScriptInitComplete = false;
+         // M12 / B1：热删层时把文字挂件与跨层文本表摘掉，否则**已销毁的层还会被画**
+         //（文字挂件循环只认 item.layer，不看 scene.layers 是否还包含它）。
+         layerTeardownHooks.push((ids) => {
+@@ -5021,7 +5065,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         });
+       let textCanvas: HTMLCanvasElement | null = null;
+       let textCtx: CanvasRenderingContext2D | null = null;
+-      if (!SKIP_TEXT && scene.layers.some((l: any) => l.isText)) {
++      if (!SKIP_TEXT) {
+         const ortho = (scene as any).general?.orthogonalprojection;
+         const projW = ortho?.width || c.width;
+         const projH = ortho?.height || c.height;
+@@ -5033,6 +5077,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         // 字体：pkg 内嵌 ttf/otf → FontFace（refs 计数，clear 归零释放）；systemfont_* → 系统字体栈
+         const fontFamilies = new Map<string, string>(); // fontPath → CSS family
+         const usedFontKeys: string[] = []; // 本次挂载引入的缓存键（cleanup 时 refs--）
++        const runtimeFontLoads = new Map<string, Promise<void>>();
+         const fontPaths = new Set<string>();
+         for (const l of scene.layers as any[]) if (l.isText && l.textFont) fontPaths.add(l.textFont);
+         // 脚本可能在包内其它字体间切换（3396722575 有 18 个）。只预载层快照路径的话，
+@@ -5046,6 +5091,46 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+             if (typeof e.name === "string" && /^fonts\/.+\.(ttf|otf|woff2?)$/i.test(e.name)) fontPaths.add(e.name);
+           }
+         }
++        const ensureRuntimeFont = (fontPath: string): Promise<void> => {
++          const fp = String(fontPath || "");
++          if (!fp || fontFamilies.has(fp)) return Promise.resolve();
++          const sys = SYSTEM_FONT_FAMILIES[fp.toLowerCase()];
++          if (sys) { fontFamilies.set(fp, sys); return Promise.resolve(); }
++          const existing = runtimeFontLoads.get(fp);
++          if (existing) return existing;
++          const load = (async () => {
++            const key = `${cfg.src}|${fp}`;
++            const cached = fontFaceCache.get(key);
++            if (cached) {
++              cached.refs++;
++              usedFontKeys.push(key);
++              fontFamilies.set(fp, cached.family);
++              return;
++            }
++            try {
++              const fe = await readAsset(fp);
++              const raw = fe
++                ? fe instanceof Uint8Array ? fe : new Uint8Array(fe as ArrayBuffer)
++                : await fetchLocalAssetFile(fp);
++              if (!raw || disposed) return;
++              const bytes = sanitizeFontForBrowser(raw);
++              const family = "wefont_" + fontKeyHash(key) + "_" + fp.split("/").pop()!.replace(/[^a-zA-Z0-9]/g, "_");
++              const url = URL.createObjectURL(new Blob([bytes as BlobPart]));
++              const face = new FontFace(family, `url(${url})`);
++              await face.load();
++              if (disposed) { URL.revokeObjectURL(url); return; }
++              document.fonts.add(face);
++              (rt.objectUrls ??= []).push(url);
++              fontFamilies.set(fp, family);
++              fontFaceCache.set(key, { family, refs: 1 });
++              usedFontKeys.push(key);
++            } catch (error) {
++              console.warn(`运行期字体加载失败 ${fp}: ${(error as Error).message}`);
++            }
++          })();
++          runtimeFontLoads.set(fp, load);
++          return load;
++        };
+         for (const fp of fontPaths) {
+           const key = `${cfg.src}|${fp}`;
+           const cached = fontFaceCache.get(key);
+@@ -5100,6 +5185,43 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+             prevCleanup?.();
+           };
+         }
++        setTextAnchor = (layer: any, anchor: unknown) => {
++          if (!layer?.isText) return;
++          const nextAnchor = String(anchor || "center").toLowerCase();
++          const allowed = new Set(["none", "center", "top", "topright", "right", "bottomright", "bottom", "bottomleft", "left", "topleft"]);
++          const next = allowed.has(nextAnchor) ? nextAnchor : "center";
++          const size = Array.isArray(layer.__textAnchorBaseSize)
++            ? layer.__textAnchorBaseSize
++            : [Math.max(0, Number(layer.size?.[0]) || 0), Math.max(0, Number(layer.size?.[1]) || 0)];
++          layer.__textAnchorBaseSize = size.slice(0, 2);
++          const offset = (value: string) => {
++            if (value === "center" || !size[0] || !size[1]) return [0, 0];
++            const halfWidth = (size[0] * (Number(layer.scale?.[0]) || 1)) / 2;
++            const halfHeight = (size[1] * (Number(layer.scale?.[1]) || 1)) / 2;
++            let x = 0, y = 0;
++            if (value.includes("left")) x += halfWidth;
++            if (value.includes("right")) x -= halfWidth;
++            if (value.includes("top")) y -= halfHeight;
++            if (value.includes("bottom")) y += halfHeight;
++            if (value === "none") {
++              const p = wtext.anchorNonePlacement(layer.textHAlign, layer.textVAlign, size[0], size[1]);
++              x += p.sx * halfWidth;
++              y += p.sy * halfHeight;
++            }
++            return [x, y];
++          };
++          const previous = Array.isArray(layer.__textAnchorAppliedOffset) ? layer.__textAnchorAppliedOffset : [0, 0];
++          const current = offset(next);
++          const dx = current[0] - previous[0], dy = current[1] - previous[1];
++          if (dx || dy) {
++            if (Array.isArray(layer.localOrigin)) { layer.localOrigin[0] += dx; layer.localOrigin[1] += dy; }
++            const isTopLevel = layer.parentId === undefined || layer.parentId === null;
++            if (Array.isArray(layer.origin)) { layer.origin[0] += dx; layer.origin[1] += dy; }
++            if (!isTopLevel) sceneApi.markTransformDirty?.(layer);
++          }
++          layer.textAnchor = next;
++          layer.__textAnchorAppliedOffset = current;
++        };
+         // 共享离屏画布：同一时刻只画/传一个挂件，尺寸按需调整
+         textCanvas = document.createElement("canvas");
+         textCtx = textCanvas.getContext("2d");
+@@ -5122,6 +5244,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+                 // [we-scene patch] layer：text/pointsize/font 写穿到真图层
+                 //（与对象字段脚本同源，见 text.js evalTextScript 写穿段）
+                 layer,
++                sceneScriptField: "text",
++                onSceneScriptResult: (value: unknown, event: string) => {
++                  if ((event === "init" || event === "update") && typeof value === "string") layer.text = value;
++                },
+                 text: layer.text ?? "",
+                 font: layer.textFont || "",
+                 pointsize: layer.textPointsize,
+@@ -5131,6 +5257,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+                 scale: layer.scale,
+                 visible: layer.visible,
+                 canvasSize: { width: projW, height: projH },
++                screenResolution: {
++                  x: c.clientWidth || window.innerWidth || 1,
++                  y: c.clientHeight || window.innerHeight || 1,
++                },
+                 timeOfDay: timeOfDayValue,
+                 userProperties: liveUserProps,
+                 shared: textShared,
+@@ -5144,12 +5274,47 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+                 windowTitle: windowDriver.snapshot,
+                 openUserShortcut: shortcuts.openUserShortcut,
+                 getLayerText: (name: string) => textLayerText.get(name),
+-                // thisLayer.getParent/getChildren/getParticleSystem 借对象代理时的查表口
++                setTextAnchor,
++                // IScene callbacks are late-bound to the same live scene API used by object
++                // scripts. The fallback reads are available during script module evaluation.
++                general: (scene as any).general || {},
++                getSceneLayer: (name: string) => {
++                  if (typeof name === "number") {
++                    return (scene.layers as any[]).filter((l) => l && !l.destroyed)[Math.trunc(name)] || null;
++                  }
++                  return sceneApi.getSceneLayer?.(String(name)) ||
++                    (scene.layers as any[]).find((l) => l.name === String(name) && !l.destroyed) || null;
++                },
+                 getSceneLayerById: (id: unknown) =>
++                  sceneApi.getSceneLayerById?.(id) ||
+                   (scene.layers as any[]).find((l) => l.id === id && !l.destroyed) || null,
++                enumerateSceneLayers: () => sceneApi.enumerateSceneLayers?.() ||
++                  (scene.layers as any[]).filter((l) => !l.destroyed),
++                createSceneLayer: (definition: unknown) => sceneApi.createSceneLayer?.(definition) || null,
++                sortSceneLayer: (layer: unknown, index: number) => sceneApi.sortSceneLayer?.(layer, index) || false,
++                getInitialLayerConfig: (layer: unknown) => sceneApi.getInitialLayerConfig?.(layer) || null,
++                getSceneAnimation: (name: string) => sceneApi.getSceneAnimation?.(name) || null,
+                 getBoneOverrides,
+                 getParticleSystems: (target: { id?: number }) =>
+-                  (target && target.id !== undefined && particleSystemsByLayer.get(target.id)) || [],
++                  sceneApi.getParticleSystems?.(target) ||
++                  (target && target.id !== undefined ? particleSystemsByLayer.get(target.id) : []) || [],
++                emitParticles: (target: { id?: number }, count: number) => sceneApi.emitParticles?.(target, count) || 0,
++                cameraTransforms: (scene as any).cameraTransforms,
++                createSceneModelData: (definition: unknown) => sceneApi.createSceneModelData?.(definition) || null,
++                destroySceneModelData: (handle: unknown) => sceneApi.destroySceneModelData?.(handle) || false,
++                onDestroySceneLayer: (layer: any) => {
++                  for (const sandbox of new Set(propSandboxes)) {
++                    if (sandbox?.thisLayer?.id === layer?.id) sandbox.destroy?.();
++                  }
++                  const index = textWidgets.findIndex((item) => item.layer === layer);
++                  if (index >= 0) {
++                    const [item] = textWidgets.splice(index, 1);
++                    if (item?.entry?.glTex) renderer.gl.deleteTexture(item.entry.glTex);
++                    if (item?.texName) textures.delete(item.texName);
++                  }
++                  if (layer?.name) textLayerText.delete(String(layer.name));
++                },
++                // thisLayer.getParent/getChildren/getParticleSystem 借对象代理时的查表口
+                 onError: (e: unknown, phase?: unknown) => {
+                   noteScriptIssue(layer, "text", e, phase);
+                   reportDiag(rt, cfg, `text script '${layer.name}' 失败: ${String((e as Error).message || e).slice(0, 120)}`, "warn");
+@@ -5190,36 +5355,6 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+             }
+             // 静态文本预置进跨层表（脚本层每帧更新自己的条目）
+             textLayerText.set(layer.name || "", String(layer.text ?? ""));
+-            // anchor ≠ center 时一次性平移 origin，让盒子按锚点贴住原点（世界 y 轴朝上）。
+-            // 用的是原盒子尺寸 —— 下面立刻把 layer.size 扩成带溢出边距的画布尺寸。
+-            // [we-scene patch] 偏移必须同时折进 localOrigin：world 逐帧由
+-            // recomposeWorld 从 local 重新合成，只改 world 的话下一帧就被冲掉，
+-            // 带脚本/动画变换的文字层锚点会当场失效。
+-            if (layer.textAnchor !== "center" && layer.size[0] > 0 && layer.size[1] > 0) {
+-              const hw = (layer.size[0] * (layer.scale[0] || 1)) / 2;
+-              const hh = (layer.size[1] * (layer.scale[1] || 1)) / 2;
+-              const a = layer.textAnchor;
+-              let adx = 0;
+-              let ady = 0;
+-              if (a.includes("left")) adx += hw;
+-              if (a.includes("right")) adx -= hw;
+-              if (a.includes("top")) ady -= hh;
+-              if (a.includes("bottom")) ady += hh;
+-              // [we-scene patch 2026-10-04] `none` = 无**固定**锚点 ⇒ 盒按**文字自己的
+-              // 对齐**（horizontalalign/verticalalign）贴 origin。规则、两张墙的官方
+-              // 证据与残留（脚本改写 origin 的 68 层）都写在 anchorNonePlacement 的头注里。
+-              if (a === "none") {
+-                const p = wtext.anchorNonePlacement(layer.textHAlign, layer.textVAlign, layer.size[0], layer.size[1]);
+-                adx += p.sx * hw;
+-                ady += p.sy * hh;
+-              }
+-              layer.origin[0] += adx;
+-              layer.origin[1] += ady;
+-              if (layer.localOrigin) {
+-                layer.localOrigin[0] += adx;
+-                layer.localOrigin[1] += ady;
+-              }
+-            }
+             // 盒子（size）只是定位框，WE 不裁剪溢出文字（halign right 时整行向左长出）。
+             // 画布/图层 quad 按盒子四周扩 M，内部盒子位置不变：文字溢出画进边距里。
+             // 边距按字号估，不能按层的长边。4708×420 的圆环文字被扩成 6756×2468 后，
+@@ -5246,6 +5381,8 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+             let margin = baseMargin;
+             item.boxW = layer.size[0] > 0 ? layer.size[0] : em0 * 4;
+             item.boxH = layer.size[1] > 0 ? layer.size[1] : em0 * 1.6;
++            layer.__textAnchorBaseSize = [item.boxW, item.boxH];
++            setTextAnchor!(layer, layer.textAnchor);
+             // [we-scene patch] 静态文字层按墨水扩边（挂载期算一次，与逐帧的媒体文字层
+             // 同一机制）：盒只是定位框，WE 不裁剪溢出文字，而我们的画布 = 盒 + 基础
+             // 边距，超出的墨水被纹理边缘切掉。预设壁纸最容易撞上——用户值常比作者导出
+@@ -5315,6 +5452,153 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+             console.warn(`文字对象 ${layer.name} 初始化失败: ${(e as Error).message}`);
+           }
+         }
++        registerRuntimeTextWidget = (layer: any) => {
++          if (!layer?.isText || textWidgets.some((item) => item.layer === layer) || disposed) return;
++          const text = String(layer.text ?? "");
++          const pointsize = Math.max(1, Number(layer.textPointsize) || 24);
++          const em = TEXT_EM_SCALE * pointsize;
++          const tintMask = wtext.textLayerHasTintMask(layer);
++          const hasVisibleEffects = ((layer.effects as Array<{ visible?: boolean }>) || []).some(
++            (effect) => effect && effect.visible !== false,
++          );
++          const boxW = layer.size?.[0] > 0 ? layer.size[0] : em * 4;
++          const boxH = layer.size?.[1] > 0 ? layer.size[1] : em * 1.6;
++          layer.__textAnchorBaseSize = [boxW, boxH];
++          setTextAnchor!(layer, layer.textAnchor);
++          let margin = hasVisibleEffects && !tintMask ? 0 : Math.min(tintMask ? 8 : 256, wtext.textCanvasMargin(em, 0));
++          if (textCtx && !tintMask && (!layer.textAnchor || layer.textAnchor === "center" || layer.textAnchor === "none")) {
++            const fontPath = layer.textFont || "";
++            const family = fontPath ? fontFamilies.get(fontPath) || "sans-serif" : "sans-serif";
++            textCtx.setTransform(1, 0, 0, 1, 0, 0);
++            textCtx.font = `${em}px "${family}", sans-serif`;
++            const metrics = textCtx.measureText("");
++            const fontHeight = (metrics.fontBoundingBoxAscent || 0) + (metrics.fontBoundingBoxDescent || 0);
++            const spacing = layer.textSpacing || [0, 0];
++            const layout = wtext.layoutText(text, {
++              boxW,
++              boxH,
++              pointsize: em,
++              lineHeight: (fontHeight > 0 ? fontHeight : em * 1.25) + spacing[1],
++              spacing,
++              padding: layer.textPadding || 0,
++              maxwidth: layer.textMaxwidth || 0,
++              limitwidth: !!layer.textLimitwidth,
++              maxrows: layer.textMaxrows || 0,
++              limitrows: !!layer.textLimitrows,
++              limituseellipsis: !!layer.textLimituseellipsis,
++              halign: layer.textHAlign || "center",
++              valign: layer.textVAlign || "center",
++              ...(layer.textAnchor === "none" ? anchorNoneRef(layer, boxW, boxH) : {}),
++            }, (value: string) => textCtx!.measureText(value).width);
++            margin = Math.max(margin, wtext.textCanvasMarginGrow(layout, boxW, boxH, margin));
++          }
++          const item: any = {
++            layer,
++            sandbox: null,
++            texName: "__wstext_" + layer.id,
++            entry: null,
++            lastKey: null,
++            quality,
++            boxW,
++            boxH,
++            margin,
++          };
++          layer.size = [boxW + margin * 2, boxH + margin * 2];
++          item.entry = {
++            glTex: rnd.makeTexture(renderer.gl, new Uint8Array([0, 0, 0, 0]), 1, 1),
++            width: 1,
++            height: 1,
++            rg88: false,
++          };
++          textures.set(item.texName, item.entry);
++          layer.textureName = item.texName;
++          layer.solid = false;
++          textWidgets.push(item);
++          if (layer.name) textLayerText.set(String(layer.name), text);
++          if (layer.textFont) void ensureRuntimeFont(layer.textFont).then(() => { item.lastKey = null; });
++          if (layer.textScript) {
++            const sandbox = evalTextScript(layer.textScript, layer.textScriptProps, {
++              layer,
++              sceneScriptField: "text",
++              onSceneScriptResult: (value: unknown, event: string) => {
++                if ((event === "init" || event === "update") && typeof value === "string") layer.text = value;
++              },
++              text,
++              font: layer.textFont || "",
++              pointsize,
++              color: layer.textColor,
++              angles: layer.angles,
++              origin: layer.origin,
++              scale: layer.scale,
++              visible: layer.visible,
++              canvasSize: { width: projW, height: projH },
++              screenResolution: {
++                x: c.clientWidth || window.innerWidth || 1,
++                y: c.clientHeight || window.innerHeight || 1,
++              },
++              timeOfDay: timeOfDayValue,
++              userProperties: liveUserProps,
++              shared: textShared,
++              storage: sceneStorage,
++              audioViews,
++              inputView,
++              ...timerOpts,
++              mediaControl,
++              windowTitle: windowDriver.snapshot,
++              openUserShortcut: shortcuts.openUserShortcut,
++              getLayerText: (name: string) => textLayerText.get(name),
++              setTextAnchor,
++              general: (scene as any).general || {},
++              getSceneLayer: (name: string) => typeof name === "number"
++                ? (scene.layers as any[]).filter((entry) => entry && !entry.destroyed)[Math.trunc(name)] || null
++                : sceneApi.getSceneLayer?.(String(name)) || (scene.layers as any[]).find((entry) => entry.name === String(name) && !entry.destroyed) || null,
++              getSceneLayerById: (id: unknown) => sceneApi.getSceneLayerById?.(id) ||
++                (scene.layers as any[]).find((entry) => entry.id === id && !entry.destroyed) || null,
++              enumerateSceneLayers: () => sceneApi.enumerateSceneLayers?.() || (scene.layers as any[]).filter((entry) => !entry.destroyed),
++              createSceneLayer: (definition: unknown) => sceneApi.createSceneLayer?.(definition) || null,
++              sortSceneLayer: (target: unknown, index: number) => sceneApi.sortSceneLayer?.(target, index) || false,
++              getInitialLayerConfig: (target: unknown) => sceneApi.getInitialLayerConfig?.(target) || null,
++              getSceneAnimation: (name: string) => sceneApi.getSceneAnimation?.(name) || null,
++              getBoneOverrides,
++              getParticleSystems: (target: { id?: number }) => sceneApi.getParticleSystems?.(target) ||
++                (target?.id !== undefined ? particleSystemsByLayer.get(target.id) : []) || [],
++              emitParticles: (target: { id?: number }, count: number) => sceneApi.emitParticles?.(target, count) || 0,
++              cameraTransforms: (scene as any).cameraTransforms,
++              createSceneModelData: (definition: unknown) => sceneApi.createSceneModelData?.(definition) || null,
++              destroySceneModelData: (handle: unknown) => sceneApi.destroySceneModelData?.(handle) || false,
++              onDestroySceneLayer: (target: any) => {
++                for (const scriptSandbox of new Set(propSandboxes)) {
++                  if (scriptSandbox?.thisLayer?.id === target?.id) scriptSandbox.destroy?.();
++                }
++                const at = textWidgets.findIndex((entry) => entry.layer === target);
++                if (at >= 0) {
++                  const [removed] = textWidgets.splice(at, 1);
++                  if (removed?.entry?.glTex) renderer.gl.deleteTexture(removed.entry.glTex);
++                  if (removed?.texName) textures.delete(removed.texName);
++                }
++                if (target?.name) textLayerText.delete(String(target.name));
++              },
++              onError: (error: unknown, phase?: unknown) => {
++                noteScriptIssue(layer, "text", error, phase);
++                reportDiag(rt, cfg, `text script '${layer.name}' 失败: ${String((error as Error).message || error).slice(0, 120)}`, "warn");
++              },
++            });
++            item.sandbox = sandbox;
++            if (sandbox) {
++              if (!textScriptInitComplete) deferredTextInits.push({ sandbox, layer });
++              else {
++                const result = sandbox.init(layer.text ?? "");
++                if (typeof result === "string") layer.text = result;
++                sandbox.applyUserProperties(liveUserProps);
++              }
++              if (sandbox.hasMediaHook) registerMediaHook(sandbox);
++              propSandboxes.push(sandbox);
++              registerResizeHook(sandbox);
++              if (sandbox.hasAnimEventHook) registerAnimEventSink(layer, { sandbox, kind: "text" });
++              registerRuntimeTextHooks?.(layer, sandbox);
++            }
++          }
++        };
+         // 场景卸载时释放文字纹理
+         if (textWidgets.length > 0) {
+           const prevCleanup = particleCleanup;
+@@ -5349,7 +5633,8 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+             // limitwidth/maxrows/limitrows 一并入 key 防同类潜伏。
+             const pts = Math.max(1, it.sandbox ? it.sandbox.thisLayer.pointsize : layer.textPointsize);
+             const fontPath = (it.sandbox && it.sandbox.thisLayer.font) || layer.textFont || "";
+-            const key = `${content}\u0000${pts}\u0000${fontPath}\u0000${layer.alpha}\u0000${layer.textCastshadow}\u0000${layer.textMaxwidth || 0}\u0000${layer.limitwidth ? 1 : 0}\u0000${layer.maxrows || 0}\u0000${layer.limitrows ? 1 : 0}`;
++            if (fontPath && !fontFamilies.has(fontPath)) void ensureRuntimeFont(fontPath).then(() => { it.lastKey = null; });
++            const key = `${content}\u0000${pts}\u0000${fontPath}\u0000${layer.alpha}\u0000${layer.textColor?.join(",")}\u0000${layer.textOpaquebackground ? 1 : 0}\u0000${layer.textBackgroundcolor?.join(",")}\u0000${layer.textBackgroundbrightness}\u0000${layer.textCastshadow}\u0000${layer.textPadding}\u0000${layer.textHAlign}\u0000${layer.textVAlign}\u0000${layer.textAnchor}\u0000${layer.textMaxwidth || 0}\u0000${layer.textLimitwidth ? 1 : 0}\u0000${layer.textMaxrows || 0}\u0000${layer.textLimitrows ? 1 : 0}`;
+             if (it.lastKey === key) continue;
+             it.lastKey = key;
+             try {
+@@ -5592,6 +5877,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         if (list) upsertRun(list, (s: any) => s === sandbox, sandbox);
+         else cursorHooks.set(layer, [sandbox]);
+       };
++      registerRuntimeTextHooks = (layer, sandbox) => addCursorHook(layer, sandbox);
+       // 文字层的 cursor* 回调（3786330502 的悬停交互挂在文字层上）
+       for (const it of textWidgets) {
+         if (it.sandbox) addCursorHook(it.layer, it.sandbox);
+@@ -5614,7 +5900,9 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         };
+         let nextLayerId =
+           1 + Math.max(0, ...(scene.layers as any[]).map((l: any) => Number(l.id) || 0));
+-        const sceneApi = {
++        sceneApi = {
++          general: (scene as any).general || {},
++          setTextAnchor,
+           recomputeVisibility,
+           // 帧内合并通道（见 markVisibilityDirty 的注释）：沙箱的 `visible` setter
+           // 优先用它，只有阶段外才落到上面的立即重算
+@@ -5629,6 +5917,140 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+           getSceneLayerById: (id: unknown) =>
+             (scene.layers as any[]).find((l) => l.id === id && !l.destroyed) || null,
+           enumerateSceneLayers: () => (scene.layers as any[]).filter((l) => !l.destroyed),
++          onDestroySceneLayer: (layer: any) => {
++            for (const sandbox of new Set(propSandboxes)) {
++              if (sandbox?.thisLayer?.id === layer?.id) sandbox.destroy?.();
++            }
++            const index = textWidgets.findIndex((item) => item.layer === layer);
++            if (index >= 0) {
++              const [item] = textWidgets.splice(index, 1);
++              if (item?.entry?.glTex) renderer.gl.deleteTexture(item.entry.glTex);
++              if (item?.texName) textures.delete(item.texName);
++            }
++            if (layer?.name) textLayerText.delete(String(layer.name));
++          },
++          sortSceneLayer: (target: any, requestedIndex: number) => {
++            const active = (scene.layers as any[]).filter((l) => l && !l.destroyed);
++            const from = active.indexOf(target);
++            const requested = Number(requestedIndex);
++            if (from < 0 || !Number.isFinite(requested)) return false;
++            const to = Math.max(0, Math.min(active.length - 1, Math.trunc(requested)));
++            if (from === to) return true;
++            active.splice(from, 1);
++            active.splice(to, 0, target);
++            // Preserve tombstone entries while replacing only the active display-order slots.
++            let next = 0;
++            for (let i = 0; i < scene.layers.length; i++) {
++              if (scene.layers[i] && !scene.layers[i].destroyed) scene.layers[i] = active[next++];
++            }
++            return true;
++          },
++          setSceneLayerParent: (child: any, parentArg: any, attachmentArg?: string | number, adjustTransforms = false) => {
++            if (!child || child.destroyed) return false;
++            let parent: any = null;
++            if (parentArg !== undefined && parentArg !== null) {
++              if (typeof parentArg === "number") parent = (scene.layers as any[]).find((l) => l.id === parentArg && !l.destroyed) || null;
++              else if (typeof parentArg === "string") parent = (scene.layers as any[]).find((l) => l.name === parentArg && !l.destroyed) || null;
++              else if (typeof parentArg === "object") parent = (scene.layers as any[]).find((l) => l.id === parentArg.id && !l.destroyed) || null;
++              if (!parent) return false;
++            }
++            // Parenting to self or one of our descendants would make recomposeWorld recurse forever.
++            for (let p = parent, guard = 0; p && guard < (scene.layers as any[]).length + 1; guard++) {
++              if (p === child) return false;
++              p = p.parentId == null ? null : (scene.layers as any[]).find((l) => l.id === p.parentId && !l.destroyed) || null;
++            }
++            let attachment: string | null = null;
++            if (attachmentArg !== undefined && attachmentArg !== null) {
++              const attachments = parent?.puppet?.attachments || [];
++              const item = typeof attachmentArg === "number"
++                ? attachments[Math.trunc(attachmentArg)]
++                : attachments.find((a: any) => a?.name === String(attachmentArg));
++              if (!item || !parent?.puppet) return false;
++              attachment = String(item.name);
++            }
++            if (child.parentId === (parent?.id ?? null) && child.attachment === attachment) return true;
++
++            const world = {
++              origin: Array.isArray(child.origin) ? child.origin.slice() : [0, 0, 0],
++              scale: Array.isArray(child.scale) ? child.scale.slice() : [1, 1, 1],
++              angles: Array.isArray(child.angles) ? child.angles.slice() : [0, 0, 0],
++            };
++            const oldParent = (scene.layers as any[]).find((l) => l.id === child.parentId && !l.destroyed);
++            if (oldParent?.childIds) oldParent.childIds = oldParent.childIds.filter((id: unknown) => id !== child.id);
++            if (oldParent) oldParent.hasChildren = !!oldParent.childIds?.length;
++            child.parentId = parent?.id ?? null;
++            child.attachment = attachment;
++            if (parent) {
++              const kids = (parent.childIds ||= []);
++              if (!kids.includes(child.id)) kids.push(child.id);
++              parent.hasChildren = true;
++            }
++
++            // Rebuild attachment offsets from local transforms. The attachment pass mutates world
++            // snapshots, so clear its derived state first to keep repeated reparenting idempotent.
++            for (const l of scene.layers as any[]) {
++              if (!l) continue;
++              delete l.attachBindDelta;
++              delete l.attachBindAngle;
++              delete l.attachBase;
++            }
++            scn.recomposeWorld(scene.layers, null);
++            const nextFollows = mdl.applyAttachmentBindOrigins(scene.layers);
++            attachFollows.splice(0, attachFollows.length, ...nextFollows);
++            if (adjustTransforms) {
++              const offset = child.attachBindDelta || [0, 0];
++              const targetX = world.origin[0] - offset[0];
++              const targetY = world.origin[1] - offset[1];
++              const targetZ = world.origin[2];
++              const parentScale = parent?.scale || [1, 1, 1];
++              const parentAngles = parent?.angles || [0, 0, 0];
++              const dx = targetX - (parent?.origin?.[0] || 0);
++              const dy = targetY - (parent?.origin?.[1] || 0);
++              const angle = Number(parentAngles[2]) || 0;
++              const c = Math.cos(angle), s = Math.sin(angle);
++              const sx = Math.abs(Number(parentScale[0])) > 1e-8 ? Number(parentScale[0]) : 1;
++              const sy = Math.abs(Number(parentScale[1])) > 1e-8 ? Number(parentScale[1]) : 1;
++              const la = child.localAngles || (child.localAngles = [0, 0, 0]);
++              const lo = child.localOrigin || (child.localOrigin = [0, 0, 0]);
++              const ls = child.localScale || (child.localScale = [1, 1, 1]);
++              lo[0] = (dx * c + dy * s) / sx;
++              lo[1] = (-dx * s + dy * c) / sy;
++              lo[2] = targetZ - (parent?.origin?.[2] || 0);
++              ls[0] = world.scale[0] / sx;
++              ls[1] = world.scale[1] / sy;
++              ls[2] = world.scale[2] / (Math.abs(Number(parentScale[2])) > 1e-8 ? Number(parentScale[2]) : 1);
++              la[0] = world.angles[0];
++              la[1] = world.angles[1];
++              la[2] = world.angles[2] - angle - (Number(child.attachBindAngle) || 0);
++            }
++            scn.recomposeWorld(scene.layers, null);
++            const roots = (scene.layers as any[]).filter((l) => transformDirty.has(l?.id));
++            for (const f of attachFollows) roots.push(f.layer);
++            const refreshedDirty = scn.collectTransformDirty(scene.layers, roots);
++            transformDirty.clear();
++            for (const id of refreshedDirty) transformDirty.add(id);
++            for (const l of scene.layers as any[]) {
++              if (!transformDirty.has(l?.id)) continue;
++              for (const ps of particleSystemsByLayer.get(l.id) ?? []) {
++                if (!particleDirty.includes(ps)) particleDirty.push(ps);
++              }
++            }
++            return true;
++          },
++          getLayerAttachmentIndex: (layer: any, attachment: string | number) => {
++            const attachments = layer?.puppet?.attachments || [];
++            if (typeof attachment === "number") return Number.isInteger(attachment) && attachment >= 0 && attachment < attachments.length ? attachment : -1;
++            return attachments.findIndex((a: any) => a?.name === String(attachment));
++          },
++          getLayerAttachmentMatrix: (layer: any, attachment: string | number) => {
++            const attachments = layer?.puppet?.attachments || [];
++            const item = typeof attachment === "number"
++              ? attachments[Math.trunc(attachment)]
++              : attachments.find((a: any) => a?.name === String(attachment));
++            if (!item || !layer?.puppet) return null;
++            mdl.computeSkinMatrices(layer.puppet, currentTime(), layer.animationLayers, getBoneOverrides(layer));
++            return mdl.attachmentWorld(layer.puppet, String(item.name));
++          },
+           getParticleSystems: (target: { id?: number }) =>
+             (target && target.id !== undefined && particleSystemsByLayer.get(target.id)) || [],
+           emitParticles: (target: { id?: number }, count: number) => {
+@@ -5655,15 +6077,19 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+               ? (renderer as any).getConstantAnimation(def)
+               : null,
+           getInitialLayerConfig: (arg: any) => {
+-            const name = arg && typeof arg === "object" ? arg.name : String(arg || "");
+-            return (scene.layers as any[]).find((l) => l.name === name) || null;
++            const active = (scene.layers as any[]).filter((l) => l && !l.destroyed);
++            let layer: any = null;
++            if (typeof arg === "number" && Number.isFinite(arg)) layer = active[Math.trunc(arg)] || null;
++            else if (arg && typeof arg === "object") layer = active.find((l) => l.id === arg.id) || null;
++            else layer = active.find((l) => l.name === String(arg ?? "")) || null;
++            return layer?.initialConfig || null;
+           },
+           createSceneLayer: (layerCfg: any) => {
+             // 字符串 = 已解析的模型路径（makeThisScene 已按 __workshopId 展开）。
+             // 克隆同 image 的已装配层（含 textureName / layerMaterial 效果），
+             // 否则会得到无贴图空层 —— 3789604238 Simple Visualizer 的 63 根克隆条。
+             let src: any = layerCfg && typeof layerCfg === "object" ? layerCfg : null;
+-            let assetToMount: { path: string; kind: "model" | "particle" } | null = null;
++            let assetToMount: { path: string; kind: "model" | "particle" | "image" } | null = null;
+             if (typeof layerCfg === "string") {
+               const imagePath = layerCfg;
+               src =
+@@ -5710,6 +6136,19 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+                     alpha: 1,
+                     brightness: 1,
+                   };
++                } else if (/\.(png|jpe?g|webp|bmp|gif|tga)$/i.test(imagePath) && assetExists(imagePath)) {
++                  assetToMount = { path: imagePath, kind: "image" };
++                  src = {
++                    image: imagePath,
++                    origin: [0, 0, 0],
++                    scale: [1, 1, 1],
++                    angles: [0, 0, 0],
++                    size: [0, 0],
++                    color: [1, 1, 1],
++                    visible: true,
++                    alpha: 1,
++                    brightness: 1,
++                  };
+                 } else {
+                   reportDiag(
+                     rt,
+@@ -5722,19 +6161,72 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+               }
+             }
+             if (!src) src = {};
++            const asVec3 = (value: any, fallback: number[]) => {
++              if (Array.isArray(value)) return [Number(value[0]) || 0, Number(value[1]) || 0, Number(value[2]) || 0];
++              if (value && typeof value === "object" && Number.isFinite(Number(value.x)) && Number.isFinite(Number(value.y))) {
++                return [Number(value.x) || 0, Number(value.y) || 0, Number(value.z) || 0];
++              }
++              return scn.parseVec3(value ?? fallback.join(" "));
++            };
++            const asVec2 = (value: any, fallback: number[]) => {
++              if (Array.isArray(value)) return [Number(value[0]) || 0, Number(value[1]) || 0];
++              if (value && typeof value === "object" && Number.isFinite(Number(value.x)) && Number.isFinite(Number(value.y))) {
++                return [Number(value.x) || 0, Number(value.y) || 0];
++              }
++              return scn.parseVec2(value ?? fallback.join(" "));
++            };
++            const asColor = (value: any, fallback: number[]) => {
++              if (Array.isArray(value) || value && typeof value === "object" && Number.isFinite(Number(value.x))) return asVec3(value, fallback);
++              return scn.parseColor(value ?? fallback.join(" "));
++            };
++            const textDefinition = src.text && typeof src.text === "object" ? src.text : null;
++            const isTextLayer = textDefinition !== null || src.text !== undefined && src.text !== null;
+             const clone: any = {
+               ...src,
+               id: nextLayerId++,
+-              origin: Array.isArray(src.origin) ? src.origin.slice() : [0, 0, 0],
+-              scale: Array.isArray(src.scale) ? src.scale.slice() : [1, 1, 1],
+-              angles: Array.isArray(src.angles) ? src.angles.slice() : [0, 0, 0],
+-              size: Array.isArray(src.size) ? src.size.slice() : [0, 0],
+-              color: Array.isArray(src.color) ? src.color.slice() : [1, 1, 1],
++              name: String(src.name || ""),
++              origin: asVec3(src.origin, [0, 0, 0]),
++              scale: asVec3(src.scale, [1, 1, 1]),
++              angles: asVec3(src.angles, [0, 0, 0]),
++              size: asVec2(src.size, [0, 0]),
++              color: asColor(src.color, [1, 1, 1]),
++              alpha: Number.isFinite(Number(src.alpha)) ? Number(src.alpha) : 1,
++              brightness: Number.isFinite(Number(src.brightness)) ? Number(src.brightness) : 1,
++              visible: src.visible !== false,
++              visibleSelf: src.visible !== false,
++              initialConfig: layerCfg,
++              isText: isTextLayer,
++              text: isTextLayer ? String(textDefinition ? textDefinition.value ?? "" : src.text) : src.text,
++              textScript: textDefinition?.script || src.textScript || null,
++              textScriptProps: textDefinition?.scriptproperties || src.textScriptProps || null,
++              textFont: typeof (src.textFont ?? src.font) === "string"
++                ? String(src.textFont ?? src.font)
++                : String((src.textFont ?? src.font)?.path || (src.textFont ?? src.font)?.name || ""),
++              textPointsize: Number(src.textPointsize ?? src.pointsize) || 24,
++              textColor: asColor(src.textColor ?? src.color, [1, 1, 1]),
++              textAnchor: src.textAnchor || src.anchor || "center",
++              textMaxwidth: Number(src.textMaxwidth ?? src.maxwidth) || 0,
++              textMaxrows: Number(src.textMaxrows ?? src.maxrows) || 0,
++              textLimitwidth: !!(src.textLimitwidth ?? src.limitwidth),
++              textLimitrows: !!(src.textLimitrows ?? src.limitrows),
++              textLimituseellipsis: !!src.textLimituseellipsis,
++              textHAlign: src.textHAlign || src.horizontalalign || "center",
++              textVAlign: src.textVAlign || src.verticalalign || "center",
++              textSpacing: asVec2(src.textSpacing ?? src.spacing, [0, 0]),
++              textPadding: Number(src.textPadding ?? src.padding) || 0,
++              textOpaquebackground: !!(src.textOpaquebackground ?? src.opaquebackground),
++              textBackgroundcolor: asColor(src.textBackgroundcolor ?? src.backgroundcolor, [0, 0, 0]),
++              textBackgroundbrightness: Number(src.textBackgroundbrightness ?? src.backgroundbrightness) || 1,
++              textCastshadow: !!(src.textCastshadow ?? src.castshadow),
+               childIds: null,
+               hasChildren: false,
+               destroyed: false,
+               animations: {},
+               animationList: [],
++              localOrigin: asVec3(src.origin, [0, 0, 0]),
++              localScale: asVec3(src.scale, [1, 1, 1]),
++              localAngles: asVec3(src.angles, [0, 0, 0]),
++              originalOrigin: asVec3(src.origin, [0, 0, 0]),
+               // 克隆条不要再跑模板层的 objectScripts（否则 64 根各自再造 64 根）
+               objectScripts: null,
+             };
+@@ -5750,6 +6242,8 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+               }));
+             }
+             scene.layers.push(clone);
++            recomputeVisibility();
++            if (clone.isText) registerRuntimeTextWidget?.(clone);
+             // 运行期创建的层（金币/收集特效等）：不在 mount 期的 transformDirty 里，
+             // 但脚本能随时改 origin。给粒子系统留标记，推进时按帧重读发射器变换，
+             // 否则特效钉在构造点的 (0,0)（1712475860 的收集特效跑到左下角）。
+@@ -5813,6 +6307,22 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+               void buildParticleSystem(ppath, clone, null, 0).then((ps) => {
+                 if (!ps) reportDiag(rt, cfg, `createLayer('${ppath}') 粒子系统装配失败`, "warn");
+               });
++            } else if (assetToMount && assetToMount.kind === "image") {
++              const imagePath = assetToMount.path;
++              clone.solid = false;
++              void loadTex(imagePath).then((entry) => {
++                if (!entry || clone.destroyed || disposed) return;
++                clone.textureName = imagePath;
++                if (clone.size[0] === 0 || clone.size[1] === 0) {
++                  const frame = entry.frames && Array.isArray(entry.frames) ? entry.frames[0] : null;
++                  clone.size = [
++                    (entry.geomFrame && entry.geomFrame.width) || (frame && frame.width) || entry.declaredWidth || entry.width,
++                    (entry.geomFrame && entry.geomFrame.height) || (frame && frame.height) || entry.declaredHeight || entry.height,
++                  ];
++                }
++              }).catch((error) => {
++                reportDiag(rt, cfg, `createLayer('${imagePath}') 贴图加载失败: ${String((error as Error).message || error).slice(0, 120)}`, "warn");
++              });
+             }
+             return clone;
+           },
+@@ -5940,6 +6450,12 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+           if (!vs) return;
+           try {
+             const sandbox = evalObjectScript(vs.script, vs.scriptproperties, {
++              sceneScriptField: `animationLayers[${index}].visible`,
++              onSceneScriptResult: (value: unknown, event: string) => {
++                if (event !== "init" && event !== "update") return;
++                const folded = foldVisibleRet(value);
++                if (folded !== undefined) al.visible = folded;
++              },
+               canvasSize: { width: objProjW, height: objProjH },
+               timeOfDay: timeOfDayValue,
+               userProperties: objUserProps,
+@@ -5991,6 +6507,12 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+             if (!def) continue;
+             try {
+               const sandbox = evalObjectScript(def.script, def.scriptproperties, {
++                sceneScriptField: `animationLayers[${index}].${field}`,
++                onSceneScriptResult: (value: unknown, event: string) => {
++                  if (event !== "init" && event !== "update") return;
++                  const number = typeof value === "number" ? value : Number((value as any)?.value);
++                  if (Number.isFinite(number)) al[field] = field === "blend" ? Math.max(0, Math.min(1, number)) : number;
++                },
+                 canvasSize: { width: objProjW, height: objProjH },
+                 timeOfDay: timeOfDayValue,
+                 userProperties: objUserProps,
+@@ -6069,6 +6591,21 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+           for (const [key, def] of Object.entries(defs)) {
+             try {
+               const sandbox = evalObjectScript(def.script, def.scriptproperties, {
++                sceneScriptField: `overrides.${key}`,
++                onSceneScriptResult: (value: unknown, event: string) => {
++                  if ((event !== "init" && event !== "update") || value === undefined || value === null) return;
++                  const list = particleSystemsByLayer.get(layer.id);
++                  if (!list) return;
++                  let next: unknown = value;
++                  if (value && typeof value === "object" && ((value as any).x !== undefined || (value as any).y !== undefined)) {
++                    const vector = value as any;
++                    next = [Number(vector.x) || 0, Number(vector.y) || 0, Number(vector.z) || 0];
++                  }
++                  for (const particleSystem of list) {
++                    if (key === "colorn" && Array.isArray(next)) particleSystem.setColorOverride(next);
++                    else if (typeof next === "number" && Number.isFinite(next)) particleSystem.setOverrideValue(key, next);
++                  }
++                },
+                 canvasSize: { width: objProjW, height: objProjH },
+                 timeOfDay: timeOfDayValue,
+                 userProperties: objUserProps,
+@@ -6111,6 +6648,14 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+             try {
+               // M12 / W8：env 收成工厂函数（热替换时按同一份 env 重新求值）。
+               const makeEnv = () => ({
++                sceneScriptField: `effects[${ei}].visible`,
++                onSceneScriptResult: (value: unknown, event: string) => {
++                  if (event !== "init" && event !== "update") return;
++                  const folded = foldVisibleRet(value);
++                  if (folded !== undefined) effect.visible = folded;
++                  const run = effectVisibleRuns.find((entry: any) => entry.effect === effect);
++                  if (run && (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value)))) run.last = value;
++                },
+                 canvasSize: { width: objProjW, height: objProjH },
+                 timeOfDay: timeOfDayValue,
+                 userProperties: objUserProps,
+@@ -6172,8 +6717,37 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+           if (!scripts) continue;
+           for (const [field, def] of Object.entries(scripts)) {
+             try {
++              const applyScriptResult = (value: unknown, event: string) => {
++                if ((event !== "init" && event !== "update") || value === undefined || value === null) return;
++                if (field === "visible") {
++                  const folded = foldVisibleRet(value);
++                  if (folded !== undefined && layer.visibleSelf !== folded) {
++                    layer.visibleSelf = folded;
++                    recomputeVisibility();
++                  }
++                  return;
++                }
++                if (typeof value === "number" && Number.isFinite(value)) {
++                  if (["alpha", "brightness", "maxwidth", "pointsize", "volume", "intensity", "exponent"].includes(field)) {
++                    scalarFieldSlot(layer, field).set(value);
++                  }
++                  return;
++                }
++                if (typeof value === "object" && (value as any).x !== undefined) {
++                  const vector = value as any;
++                  if (!Number.isFinite(Number(vector.x)) || !Number.isFinite(Number(vector.y))) return;
++                  const slot = fieldSlot(layer, field);
++                  layer[slot] = field === "angles"
++                    ? wtext.scriptAnglesToRad(vector)
++                    : [Number(vector.x) || 0, Number(vector.y) || 0, Number(vector.z) || 0];
++                  if (field === "color" && layer.isText) layer.textColor = layer.color;
++                  sceneApi.markTransformDirty?.(layer);
++                }
++              };
+               // M12 / W8：env 收成工厂函数（热替换时按同一份 env 重新求值）。
+               const makeEnv = () => ({
++                sceneScriptField: field,
++                onSceneScriptResult: applyScriptResult,
+                 canvasSize: { width: objProjW, height: objProjH },
+                 screenResolution: { x: c.clientWidth || window.innerWidth || 1, y: c.clientHeight || window.innerHeight || 1 },
+                 // 初值同 timeOfDayValue；帧循环每秒回填，昼夜脚本不再冻结。
+@@ -6338,6 +6912,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+           for (const [field, def] of Object.entries(generalScripts)) {
+             try {
+               const sandbox = evalObjectScript(def.script, def.scriptproperties, {
++                sceneScriptField: `general.${field}`,
++                onSceneScriptResult: (value: unknown, event: string) => {
++                  if ((event === "init" || event === "update") && value !== undefined) writeGeneralField(field, value);
++                },
+                 canvasSize: { width: objProjW, height: objProjH },
+                 timeOfDay: timeOfDayValue,
+                 userProperties: objUserProps,
+@@ -6386,6 +6964,13 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+           if (typeof tir === "string") d.layer.text = tir;
+           d.sandbox.applyUserProperties(liveUserProps);
+         }
++        textScriptInitComplete = true;
++        const configuredGeneralSettings = (cfg as any).generalSettings && typeof (cfg as any).generalSettings === "object"
++          ? { ...(cfg as any).generalSettings }
++          : { language: String(navigator.language || "en-US").toLowerCase() };
++        const initialGeneralSettings = pendingGeneralSettings || configuredGeneralSettings;
++        applyGeneralSettingsToScripts(initialGeneralSettings);
++        pendingGeneralSettings = null;
+         if (generalScriptRuns.length) {
+           reportDiag(rt, cfg, `general scripts: ${generalScriptRuns.map((r) => r.field).join(",")}`, "info");
+         }
+diff --git a/renderer/src/scene-script-runtime.ts b/renderer/src/scene-script-runtime.ts
+new file mode 100644
+index 0000000..6383e7b
+--- /dev/null
++++ b/renderer/src/scene-script-runtime.ts
+@@ -0,0 +1,616 @@
++import SceneScriptWorker from "./scene-script-worker.ts?worker&inline";
++
++type ScriptKind = "text" | "object";
++type ScriptEvent = "init" | "update" | "applyUserProperties" | "applyGeneralSettings" | "cursorClick" | "cursorEnter" | "cursorLeave" | "cursorDown" | "cursorUp" | "cursorMove" | "mediaPropertiesChanged" | "mediaThumbnailChanged" | "mediaPlaybackChanged" | "mediaTimelineChanged" | "mediaStatusChanged" | "mediaLyricsChanged" | "animationEvent" | "resizeScreen" | "destroy";
++type RuntimeOptions = { generation: number; layers: () => any[]; onTimeout: (info: { script: string; event: string; milliseconds: number }) => void; onFailure?: (message: string) => void };
++type RecordEntry = { id: string; label: string; kind: ScriptKind; source: string; properties: any; opts: any; facade: any; result: any; destroyed: boolean; registered: boolean; lastUpdate: number; errors: number };
++type QueueItem = { type: "register" | "task"; record: RecordEntry; event: ScriptEvent | "initialization"; args?: any[]; raw?: boolean };
++
++const MAX_SOURCE_BYTES = 512 * 1024;
++const MAX_MESSAGE_BYTES = 1024 * 1024;
++const MAX_PENDING_EVENTS = 256;
++const MAX_PENDING_UPDATES = 1024;
++const MAX_UPDATES_PER_TICK = 64;
++const MAX_LAYER_SNAPSHOT_COUNT = 1600;
++const PATCH_KEYS = new Set([
++  "visible", "visibleSelf", "destroyed", "parentId", "hasChildren", "origin", "localOrigin", "scale", "localScale",
++  "angles", "localAngles", "color", "alpha", "brightness", "perspective", "solid", "rootmotion", "parallaxDepth", "text",
++  "textPointsize", "textFont", "textColor", "textBackgroundcolor", "textOpaquebackground", "textBackgroundbrightness",
++  "textPadding", "textHAlign", "textVAlign", "textLimitwidth", "textMaxwidth", "textLimitrows", "textMaxrows", "textLimituseellipsis",
++  "textAnchor", "textureAnimation", "spriteFrameIndex", "soundprops",
++]);
++const VECTOR_KEYS = new Set(["origin", "localOrigin", "scale", "localScale", "angles", "localAngles", "color", "textColor", "textBackgroundcolor", "parallaxDepth"]);
++const BOOL_KEYS = new Set(["visible", "visibleSelf", "destroyed", "hasChildren", "perspective", "solid", "rootmotion", "textOpaquebackground", "textLimitwidth", "textLimitrows", "textLimituseellipsis"]);
++const NUMBER_KEYS = new Set(["alpha", "brightness", "textPointsize", "textBackgroundbrightness", "textPadding", "textMaxwidth", "textMaxrows", "spriteFrameIndex"]);
++
++function safeValue(value: any, depth = 0, seen = new WeakSet<object>(), budget = { nodes: 0 }): any {
++  if (++budget.nodes > 20000 || depth > 20) return undefined;
++  if (value == null || typeof value === "boolean") return value;
++  if (typeof value === "string") return value.length > 65536 ? value.slice(0, 65536) : value;
++  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
++  if (typeof value !== "object" || seen.has(value)) return undefined;
++  seen.add(value);
++  if (ArrayBuffer.isView(value)) return Array.from(value as any).slice(0, 4096).map((item: any) => Number.isFinite(Number(item)) ? Number(item) : 0);
++  if (Array.isArray(value)) return value.slice(0, 4096).map((item) => safeValue(item, depth + 1, seen, budget));
++  const out: Record<string, any> = Object.create(null);
++  for (const key of Object.keys(value).slice(0, 4096)) {
++    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
++    let next: any;
++    try { next = safeValue(value[key], depth + 1, seen, budget); } catch { continue; }
++    if (next !== undefined) out[key] = next;
++  }
++  return out;
++}
++
++function snapshotLayer(layer: any): any {
++  if (!layer || typeof layer !== "object") return null;
++  const out: Record<string, any> = Object.create(null);
++  const keys = [
++    "id", "name", "type", "destroyed", "parentId", "childIds", "hasChildren", "visible", "visibleSelf", "origin", "localOrigin",
++    "scale", "localScale", "angles", "localAngles", "size", "color", "alpha", "brightness", "perspective", "solid", "rootmotion",
++    "parallaxDepth", "text", "textPointsize", "textFont", "textColor", "textBackgroundcolor", "textOpaquebackground",
++    "textBackgroundbrightness", "textPadding", "textHAlign", "textVAlign", "textLimitwidth", "textMaxwidth", "textLimitrows",
++    "textMaxrows", "textLimituseellipsis", "textAnchor", "spriteFrameIndex", "spriteFrameCount", "spriteDuration", "image",
++    "textureName", "particle", "soundprops", "animations", "animationList", "animationLayers", "effects", "materialPasses",
++    "textureAnimation", "initialConfig", "attachment", "originalOrigin",
++  ];
++  for (const key of keys) {
++    try {
++      if (!(key in layer)) continue;
++      if (key === "effects" && Array.isArray(layer.effects)) {
++        out.effects = layer.effects.slice(0, 128).map((effect: any) => {
++          const copy = safeValue(effect);
++          if (copy && typeof copy === "object") delete copy.script;
++          return copy;
++        });
++      } else if (key === "textureAnimation") {
++        const state = layer.textureAnimation;
++        if (state && typeof state === "object") out.textureAnimation = safeValue({ frame: state.frame, playing: state.playing, rate: state.rate, restart: state.restart, phase: state.phase });
++      } else out[key] = safeValue(layer[key]);
++    } catch { /* omit getters that are not plain scene data */ }
++  }
++  return out;
++}
++
++function snapshotInput(view: any): any {
++  if (!view || typeof view !== "object") return Object.create(null);
++  const vector = (value: any) => value && typeof value === "object" ? { x: Number(value.x) || 0, y: Number(value.y) || 0, z: Number(value.z) || 0 } : { x: 0, y: 0, z: 0 };
++  return {
++    cursorWorldPosition: vector(view.cursorWorldPosition), cursorScreenPosition: vector(view.cursorScreenPosition),
++    cursorPosition: vector(view.cursorPosition), cursorPositionLast: vector(view.cursorPositionLast), cursorLeftDown: !!view.cursorLeftDown,
++  };
++}
++
++function audioSnapshot(views: any): Record<string, any> {
++  const out: Record<string, any> = Object.create(null);
++  if (views instanceof Map) for (const [size, buffers] of views) out[String(size)] = safeValue(buffers);
++  return out;
++}
++
++function eventFlags(source: string, name: string): boolean {
++  return new RegExp(`\\bfunction\\s*\\*?\\s*${name}\\s*\\(|\\b(?:var|let|const)\\s+${name}\\s*=`).test(source);
++}
++
++export class SceneScriptRuntime {
++  private readonly generation: number;
++  private readonly layers: () => any[];
++  private readonly onTimeout: RuntimeOptions["onTimeout"];
++  private readonly onFailure: (message: string) => void;
++  private worker: Worker | null = null;
++  private nextId = 1;
++  private readonly records = new Map<string, RecordEntry>();
++  private readonly controls: QueueItem[] = [];
++  private readonly updates = new Map<string, { record: RecordEntry; args: any[]; raw: boolean }>();
++  private updateCursor = 0;
++  private busy = false;
++  private active: { type: "register" | "task" | "tick" | "timer" | "dispose"; event?: string; id?: string; startedAt: number; watchdog?: ReturnType<typeof setTimeout> } | null = null;
++  private disabled = false;
++  private disposed = false;
++  private disposeRequested = false;
++  private flushQueued = false;
++  private readonly actionTimes = new Map<string, number[]>();
++
++  constructor(options: RuntimeOptions) {
++    this.generation = options.generation;
++    this.layers = options.layers;
++    this.onTimeout = options.onTimeout;
++    this.onFailure = options.onFailure || (() => {});
++  }
++
++  get isDisabled(): boolean { return this.disabled || this.disposed; }
++
++  createSandbox(kind: ScriptKind, script: string, properties: any, opts: any): any {
++    const source = typeof script === "string" ? script : "";
++    const id = `script-${this.nextId++}`;
++    const labelBase = String(opts?.sceneScriptLabel || opts?.layer?.name || (kind === "text" ? "text script" : "scene script"));
++    const label = `${labelBase}${opts?.sceneScriptField ? ` · ${String(opts.sceneScriptField).slice(0, 48)}` : ""}`.slice(0, 120);
++    const record: RecordEntry = { id, label, kind, source, properties: safeValue(properties || {}), opts: opts || {}, facade: null, result: undefined, destroyed: false, registered: false, lastUpdate: 0, errors: 0 };
++    this.records.set(id, record);
++    const facade = this.makeFacade(record);
++    record.facade = facade;
++    if (new TextEncoder().encode(source).byteLength > MAX_SOURCE_BYTES) {
++      facade.disabled = true;
++      opts?.onError?.(new Error("Script source is over the 512 KB worker limit."), "initialization");
++      return facade;
++    }
++    if (this.controls.length >= MAX_PENDING_EVENTS) {
++      facade.disabled = true;
++      opts?.onError?.(new Error("SceneScript pending event limit reached."), "initialization");
++      return facade;
++    }
++    this.controls.push({ type: "register", record, event: "initialization" });
++    this.flush();
++    return facade;
++  }
++
++  private makeFacade(record: RecordEntry): any {
++    const runtime = this;
++    const request = (event: ScriptEvent, args: any[] = [], raw = false): any => {
++      if (this.isDisabled || record.destroyed || record.facade?.disabled) return undefined;
++      if (event === "update") {
++        // Do not queue frame work behind a slow script. Updates collected before
++        // the worker starts are coalesced; once it is busy, this frame is skipped.
++        if (this.busy || this.controls.length > 0) return record.result;
++        if (this.updates.size < MAX_PENDING_UPDATES || this.updates.has(record.id)) this.updates.set(record.id, { record, args, raw });
++        this.scheduleFlush();
++        return record.result;
++      }
++      if (this.controls.length >= MAX_PENDING_EVENTS) {
++        record.errors++;
++        if (record.errors === 1) record.opts.onError?.(new Error("SceneScript event limit reached; event skipped."), event);
++        return undefined;
++      }
++      if (event === "destroy") record.destroyed = true;
++      this.controls.push({ type: "task", record, event, args, raw });
++      this.flush();
++      return undefined;
++    };
++    const entryDisabled: Record<string, boolean> = Object.create(null);
++    return {
++      id: record.id,
++      engine: {
++        runtime: 0, frametime: 1 / 60, timeOfDay: Number(record.opts.timeOfDay) || 0,
++        screenResolution: safeValue(record.opts.screenResolution || { x: 1920, y: 1080 }),
++        canvasSize: safeValue(record.opts.canvasSize || { width: 1920, height: 1080 }),
++      },
++      thisLayer: { id: record.opts.layer?.id ?? null, name: record.opts.layer?.name || "" },
++      scriptProperties: safeValue(record.properties || {}),
++      hasUpdate: eventFlags(record.source, "update"),
++      hasCursorHook: ["cursorClick", "cursorEnter", "cursorLeave", "cursorDown", "cursorUp", "cursorMove"].some((name) => eventFlags(record.source, name)),
++      hasMediaHook: ["mediaPropertiesChanged", "mediaThumbnailChanged", "mediaPlaybackChanged", "mediaTimelineChanged", "mediaStatusChanged", "mediaLyricsChanged"].some((name) => eventFlags(record.source, name)),
++      hasApplyHook: eventFlags(record.source, "applyUserProperties"),
++      hasDestroyHook: eventFlags(record.source, "destroy"),
++      hasGeneralSettingsHook: eventFlags(record.source, "applyGeneralSettings"),
++      hasAnimEventHook: eventFlags(record.source, "animationEvent"),
++      hasResizeHook: eventFlags(record.source, "resizeScreen"),
++      errCount: 0, errByEntry: Object.create(null), entryDisabled,
++      get disabled() { return runtime.isDisabled || !!entryDisabled.update || record.destroyed; },
++      set disabled(value: boolean) { if (value) entryDisabled.update = true; },
++      init: (value: any) => request("init", [value]),
++      applyUserProperties: (props: any) => request("applyUserProperties", [props || {}]),
++      applyGeneralSettings: (settings: any) => request("applyGeneralSettings", [settings || {}]),
++      destroy: () => request("destroy"),
++      callUpdate: (value: any) => request("update", [value]),
++      callUpdateRaw: (value: any) => request("update", [value], true),
++      callCursor: (name: string, event: any) => request(name as ScriptEvent, [event]),
++      callMedia: (name: string, event: any) => request(name as ScriptEvent, [event]),
++      callAnimationEvent: (event: any, value: any) => request("animationEvent", [event, value]),
++      callResize: (width: number, height: number) => request("resizeScreen", [width, height]),
++    };
++  }
++
++  dispose(): void {
++    if (this.disposed || this.disposeRequested) return;
++    this.disposeRequested = true;
++    this.updates.clear();
++    for (let i = this.controls.length - 1; i >= 0; i--) if (this.controls[i].event !== "destroy") this.controls.splice(i, 1);
++    if (!this.worker || this.disabled) { this.terminate(); return; }
++    this.scheduleFlush();
++    setTimeout(() => { if (!this.disposed) this.terminate(); }, 1000);
++  }
++
++  private scheduleFlush(): void {
++    if (this.flushQueued || this.busy || this.disabled || this.disposed) return;
++    this.flushQueued = true;
++    queueMicrotask(() => { this.flushQueued = false; this.flush(); });
++  }
++
++  private ensureWorker(): boolean {
++    if (this.worker) return true;
++    if (typeof Worker !== "function") { this.fail("Dedicated Workers are unavailable; SceneScript remains disabled."); return false; }
++    try {
++      this.worker = new SceneScriptWorker();
++      this.worker.onmessage = (event: MessageEvent<any>) => this.receive(event.data);
++      this.worker.onerror = (event: ErrorEvent) => this.fail(`SceneScript worker failed: ${String(event.message || "unknown worker error").slice(0, 120)}`);
++      this.worker.onmessageerror = () => this.fail("SceneScript worker returned an unreadable message.");
++      return true;
++    } catch (error) {
++      this.fail(`Could not start SceneScript worker: ${String((error as Error)?.message || error).slice(0, 120)}`);
++      return false;
++    }
++  }
++
++  private snapshotContext(record: RecordEntry): any {
++    const opts = record.opts || {};
++    const engine = record.facade.engine;
++    const context = {
++      layerId: String(opts.layer?.id ?? ""),
++      field: String(opts.sceneScriptField || ""),
++      options: {
++        canvasSize: safeValue(opts.canvasSize || engine.canvasSize),
++        screenResolution: safeValue(engine.screenResolution || opts.screenResolution || { x: 1920, y: 1080 }),
++        timeOfDay: Number(engine.timeOfDay ?? opts.timeOfDay) || 0,
++        frametime: Number(engine.frametime) > 0 ? Number(engine.frametime) : 1 / 60,
++        runtime: Number(engine.runtime) || 0,
++        isRunningInEditor: !!opts.isRunningInEditor,
++        isScreensaver: !!opts.isScreensaver,
++        workshopId: safeValue(opts.workshopId),
++        targetEffectIndex: Array.isArray(opts.layer?.effects) && opts.targetEffect ? opts.layer.effects.indexOf(opts.targetEffect) : -1,
++      },
++      engine: {
++        runtime: Number(engine.runtime) || 0,
++        frametime: Number(engine.frametime) > 0 ? Number(engine.frametime) : 1 / 60,
++        timeOfDay: Number(engine.timeOfDay ?? opts.timeOfDay) || 0,
++        screenResolution: safeValue(engine.screenResolution || opts.screenResolution || { x: 1920, y: 1080 }),
++      },
++      userProperties: safeValue(opts.userProperties || {}),
++      shared: safeValue(opts.shared || {}),
++      input: snapshotInput(opts.inputView),
++      audio: audioSnapshot(opts.audioViews),
++      general: safeValue(opts.general || {}),
++      cameraTransforms: safeValue(typeof opts.cameraTransforms === "function" ? opts.cameraTransforms() : opts.cameraTransforms || {}),
++      windowTitle: safeValue(opts.windowTitle || { title: "" }),
++      mediaSnapshot: safeValue(opts.mediaControl?.snapshot || null),
++    };
++    const serialized = JSON.stringify(context);
++    if (new TextEncoder().encode(serialized).byteLength > MAX_MESSAGE_BYTES) throw new Error("SceneScript bridge snapshot exceeded 1 MB.");
++    return context;
++  }
++
++  private sceneSnapshot(): any[] {
++    const list = this.layers();
++    if (!Array.isArray(list)) return [];
++    if (list.length > MAX_LAYER_SNAPSHOT_COUNT) throw new Error("Scene has too many layers for the SceneScript bridge.");
++    const snapshot = list.filter((layer) => layer && !layer.destroyed).map(snapshotLayer).filter(Boolean);
++    if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > MAX_MESSAGE_BYTES) throw new Error("Scene layer snapshot exceeded 1 MB.");
++    return snapshot;
++  }
++
++  private flush(): void {
++    if (this.busy || this.disabled || this.disposed || !this.ensureWorker()) return;
++    if (this.controls.length) {
++      const item = this.controls.shift()!;
++      try {
++        const record = item.record;
++        const common = { generation: this.generation, id: record.id, kind: record.kind, context: this.snapshotContext(record), sceneLayers: this.sceneSnapshot() };
++        const message = item.type === "register"
++          ? { type: "register", ...common, code: record.source, scriptProperties: record.properties }
++          : { type: "task", ...common, event: item.event, args: safeValue(item.args || []), raw: !!item.raw };
++        this.post(message, item.type, record.id, item.event);
++      } catch (error) {
++        item.record.opts.onError?.(new Error(String((error as Error)?.message || error)), item.event);
++        this.scheduleFlush();
++      }
++      return;
++    }
++    if (this.updates.size) {
++      const updates = [...this.updates.values()];
++      this.updates.clear();
++      const count = Math.min(MAX_UPDATES_PER_TICK, updates.length);
++      const start = this.updateCursor % updates.length;
++      const selected = Array.from({ length: count }, (_, index) => updates[(start + index) % updates.length]);
++      this.updateCursor = (start + count) % updates.length;
++      try {
++        const events = selected.filter(({ record }) => !record.destroyed).map(({ record, args, raw }) => ({
++          id: record.id, args: safeValue(args), raw,
++          context: this.snapshotContext(record),
++        }));
++        if (!events.length) { this.scheduleFlush(); return; }
++        this.post({ type: "tick", generation: this.generation, sceneLayers: this.sceneSnapshot(), events }, "tick");
++      } catch (error) {
++        for (const { record } of updates) record.opts.onError?.(new Error(String((error as Error)?.message || error)), "update");
++        this.scheduleFlush();
++      }
++      return;
++    }
++    if (this.disposeRequested) {
++      this.post({ type: "dispose", generation: this.generation }, "dispose");
++    }
++  }
++
++  private post(message: any, type: "register" | "task" | "tick" | "dispose", id?: string, event?: string): void {
++    if (!this.worker || this.disabled || this.disposed) return;
++    const bytes = new TextEncoder().encode(JSON.stringify(message)).byteLength;
++    if (bytes > MAX_MESSAGE_BYTES) { this.fail("SceneScript bridge message exceeded 1 MB."); return; }
++    this.busy = true;
++    this.active = { type, id, event, startedAt: Date.now() };
++    this.armWatchdog(type === "tick" ? "update" : event || type, id, type === "register" || event === "init" ? 2500 : type === "tick" ? 1500 : 2000);
++    try { this.worker.postMessage(message); }
++    catch (error) { this.fail(`Could not send SceneScript bridge message: ${String((error as Error)?.message || error).slice(0, 120)}`); }
++  }
++
++  private armWatchdog(event: string, id?: string, milliseconds = 2000): void {
++    if (!this.active) return;
++    if (this.active.watchdog) clearTimeout(this.active.watchdog);
++    this.active.event = event;
++    this.active.id = id;
++    this.active.watchdog = setTimeout(() => {
++      if (!this.busy || !this.active || this.disabled) return;
++      const record = id ? this.records.get(id) : null;
++      this.disabled = true;
++      this.onTimeout({ script: record?.label || id || "unknown script", event, milliseconds });
++      this.terminate(false);
++    }, milliseconds);
++  }
++
++  private receive(message: any): void {
++    if (!message || message.generation !== this.generation || this.disposed || this.disabled) return;
++    try {
++      if (new TextEncoder().encode(JSON.stringify(message)).byteLength > MAX_MESSAGE_BYTES) { this.fail("SceneScript worker response exceeded 1 MB."); return; }
++    } catch { this.fail("SceneScript worker response was not serializable."); return; }
++    if (message.type === "begin") {
++      if (this.active?.watchdog) clearTimeout(this.active.watchdog);
++      this.busy = true;
++      this.active = { ...(this.active || { type: "timer", startedAt: Date.now() }), id: String(message.id), event: String(message.event), startedAt: Date.now() } as any;
++      this.armWatchdog(String(message.event), String(message.id), message.event === "update" ? 1500 : message.event === "initialization" || message.event === "init" ? 2500 : 2000);
++      return;
++    }
++    if (message.type === "result") {
++      const record = this.records.get(String(message.id));
++      if (record && message.error) record.opts.onError?.(new Error(String(message.error).slice(0, 200)), message.event);
++      if (record && Array.isArray(message.errors)) for (const item of message.errors.slice(0, 16)) record.opts.onError?.(new Error(String(item.message || "Script error").slice(0, 180)), item.phase || message.event);
++      if (record && message.event === "initialization" && message.ok) record.registered = true;
++      if (record && "result" in message && message.result !== undefined) record.result = message.result;
++      if (record && message.event === "init" && record.kind === "text" && typeof message.result === "string" && record.opts.layer) record.opts.layer.text = message.result;
++      if (record) {
++        this.applyPatches(record, message.layers);
++        this.applyCommands(record, message.commands);
++        if (message.shared && record.opts.shared && typeof record.opts.shared === "object") this.mergeInto(record.opts.shared, message.shared);
++        if (message.result !== undefined && (message.event === "init" || message.event === "update")) {
++          try { record.opts.onSceneScriptResult?.(safeValue(message.result), message.event); } catch { /* keep the scene loop alive */ }
++        }
++      }
++      if (this.active?.watchdog) clearTimeout(this.active.watchdog);
++      if (this.active?.type === "tick") {
++        this.active.watchdog = undefined;
++        this.scheduleNextWatchdog();
++      } else {
++        this.active = null; this.busy = false; this.scheduleFlush();
++      }
++      return;
++    }
++    if (message.type === "done") {
++      if (this.active?.watchdog) clearTimeout(this.active.watchdog);
++      if (message.batch === "dispose") { this.terminate(); return; }
++      this.active = null; this.busy = false; this.scheduleFlush();
++    }
++  }
++
++  private scheduleNextWatchdog(): void {
++    // Per-script watchdogs are armed by Worker begin messages. This fallback bounds a batch
++    // that fails before it can announce its next event.
++    if (!this.active) return;
++    this.active.watchdog = setTimeout(() => {
++      if (!this.busy || !this.active || this.disabled) return;
++      const record = this.active.id ? this.records.get(this.active.id) : null;
++      this.disabled = true;
++      this.onTimeout({ script: record?.label || this.active.id || "unknown script", event: this.active.event || "update", milliseconds: 1500 });
++      this.terminate(false);
++    }, 1500);
++  }
++
++  private applyPatches(record: RecordEntry, patches: any): void {
++    if (!Array.isArray(patches)) return;
++    const liveLayers = this.layers();
++    if (!Array.isArray(liveLayers)) return;
++    for (const patch of patches.slice(0, MAX_LAYER_SNAPSHOT_COUNT)) {
++      if (!patch || typeof patch !== "object" || !Number.isSafeInteger(Number(patch.id))) continue;
++      const layer = liveLayers.find((item) => item && !item.destroyed && String(item.id) === String(patch.id));
++      if (!layer) continue;
++      let transformDirty = false, visibilityDirty = false;
++      let parentChanged = false, nextParentId: number | null = null;
++      for (const [key, value] of Object.entries(patch)) {
++        if (!PATCH_KEYS.has(key) || key === "id" || key === "name" || key === "type" || key === "size") continue;
++        if (VECTOR_KEYS.has(key)) {
++          if (!Array.isArray(value) || value.length < 2 || value.length > 4 || value.some((n) => !Number.isFinite(Number(n)))) continue;
++          layer[key] = value.slice(0, 3).map(Number);
++          if (["origin", "localOrigin", "scale", "localScale", "angles", "localAngles"].includes(key)) transformDirty = true;
++        } else if (BOOL_KEYS.has(key)) {
++          if (typeof value !== "boolean") continue;
++          layer[key] = value;
++          if (key === "visible" || key === "visibleSelf") visibilityDirty = true;
++        } else if (NUMBER_KEYS.has(key)) {
++          const number = Number(value);
++          if (!Number.isFinite(number) || Math.abs(number) > 1e9) continue;
++          layer[key] = number;
++        } else if (key === "textureAnimation" && value && typeof value === "object") {
++          const state: any = layer.textureAnimation ||= { frame: null, playing: true, rate: 1, restart: false, phase: 0 };
++          const textureState = value as Record<string, unknown>;
++          for (const field of ["frame", "playing", "rate", "restart", "phase"]) if (field in textureState) state[field] = safeValue(textureState[field]);
++        } else if (key === "soundprops" && value && typeof value === "object") {
++          layer.soundprops ||= {};
++          const soundprops = value as Record<string, unknown>;
++          if (Number.isFinite(Number(soundprops.volume))) layer.soundprops.volume = Math.max(0, Math.min(1, Number(soundprops.volume)));
++        } else if (key === "parentId") {
++          if (value === null || Number.isSafeInteger(Number(value))) {
++            const parentId = value === null ? null : Number(value);
++            if (parentId === null || (parentId !== Number(layer.id) && liveLayers.some((candidate) => Number(candidate?.id) === parentId) && !this.wouldCreateParentCycle(liveLayers, Number(layer.id), parentId))) {
++              parentChanged = true;
++              nextParentId = parentId;
++            }
++          }
++        } else if (["text", "textFont", "textHAlign", "textVAlign", "textAnchor"].includes(key)) {
++          const maxLength = key === "text" ? 65536 : key === "textFont" ? 512 : 64;
++          if (typeof value === "string" && value.length <= maxLength) layer[key] = value;
++        } else if (key === "childIds" && Array.isArray(value)) layer.childIds = value.slice(0, 512).filter((id) => Number.isSafeInteger(Number(id))).map(Number);
++        else if (key === "textLimitwidth" || key === "textLimitrows" || key === "textLimituseellipsis") layer[key] = !!value;
++      }
++      if (patch.destroyed === true && !layer.destroyed) {
++        layer.visibleSelf = false; layer.visible = false; layer.destroyed = true;
++        try { record.opts.onDestroySceneLayer?.(layer); } catch { /* keep frame cleanup moving */ }
++      }
++      if (parentChanged) {
++        try {
++          if (record.opts.setSceneLayerParent) record.opts.setSceneLayerParent(layer, nextParentId, null, false);
++          else layer.parentId = nextParentId;
++        } catch { /* validated hierarchy remains usable */ }
++      }
++      if (transformDirty) { try { record.opts.markTransformDirty?.(layer); } catch { /* validated state remains */ } }
++      if (visibilityDirty) { try { (record.opts.markVisibilityDirty || record.opts.recomputeVisibility)?.(); } catch { /* validated state remains */ } }
++    }
++  }
++
++  private wouldCreateParentCycle(layers: any[], childId: number, parentId: number): boolean {
++    let current: number | null = parentId;
++    const visited = new Set<number>();
++    while (current !== null && visited.size <= layers.length) {
++      if (current === childId || visited.has(current)) return true;
++      visited.add(current);
++      const layer = layers.find((item) => Number(item?.id) === current);
++      if (!layer || layer.parentId == null) return false;
++      const next = Number(layer.parentId);
++      current = Number.isSafeInteger(next) ? next : null;
++    }
++    return visited.size > layers.length;
++  }
++
++  private allow(action: string, max: number, windowMs: number): boolean {
++    const now = Date.now();
++    const entries = (this.actionTimes.get(action) || []).filter((time) => now - time < windowMs);
++    if (entries.length >= max) return false;
++    entries.push(now); this.actionTimes.set(action, entries); return true;
++  }
++
++  private applyCommands(record: RecordEntry, commands: any): void {
++    if (!Array.isArray(commands)) return;
++    for (const command of commands.slice(0, 128)) {
++      if (!command || typeof command !== "object") continue;
++      const layers = this.layers();
++      const target = command.layerId == null ? null : layers.find((layer) => layer && !layer.destroyed && String(layer.id) === String(command.layerId));
++      switch (command.kind) {
++        case "shortcut": {
++          const name = String(command.name || "");
++          if (!/^[\p{L}\p{N}_.:-]{1,128}$/u.test(name) || !this.allow("shortcut", 5, 1000)) break;
++          try { record.opts.openUserShortcut?.(name); } catch { /* rejected host request */ }
++          break;
++        }
++        case "emitParticles": {
++          const count = Math.max(0, Math.min(256, Math.trunc(Number(command.count) || 0)));
++          if (!target || !this.allow("particles", 30, 1000) || !count) break;
++          try { record.opts.emitParticles?.(target, count); } catch { /* unsupported host action */ }
++          break;
++        }
++        case "media": {
++          const action = String(command.action || "");
++          if (!["skipNext", "skipPrevious", "play", "pause", "playPause"].includes(action) || !this.allow("media", 8, 1000)) break;
++          try { record.opts.mediaControl?.[action]?.(); } catch { /* media provider may be absent */ }
++          break;
++        }
++        case "createLayer": {
++          let config = command.config;
++          if (typeof config === "string") {
++            const path = this.normalizedAssetPath(config);
++            if (!path) break;
++            config = path;
++          } else if (!config || typeof config !== "object") break;
++          else {
++            config = this.normalizeLayerConfig(config);
++            if (!config) break;
++          }
++          if (!this.allow("layer-create", 32, 1000)) break;
++          try { record.opts.createSceneLayer?.(config); } catch { /* scene factory reports its own diagnostic */ }
++          break;
++        }
++        case "sortLayer":
++          if (target && Number.isFinite(Number(command.index)) && this.allow("sort-layer", 60, 1000)) { try { record.opts.sortSceneLayer?.(target, Math.max(0, Math.min(layers.length - 1, Math.trunc(Number(command.index))))); } catch { /* invalid scene mutation */ } }
++          break;
++        case "setParent":
++          if (target && (command.parentId == null || Number.isSafeInteger(Number(command.parentId))) && (command.parentId == null || layers.some((layer) => Number(layer?.id) === Number(command.parentId))) && Number(command.parentId) !== Number(target.id) && (command.parentId == null || !this.wouldCreateParentCycle(layers, Number(target.id), Number(command.parentId))) && (command.attachment == null || (typeof command.attachment === "string" && command.attachment.length <= 128)) && this.allow("set-parent", 60, 1000)) {
++            try { record.opts.setSceneLayerParent?.(target, command.parentId, command.attachment, !!command.adjust); } catch { /* invalid graph mutation */ }
++          }
++          break;
++        case "textAnchor":
++          if (target && typeof command.anchor === "string" && command.anchor.length <= 32 && this.allow("text-anchor", 60, 1000)) { try { record.opts.setTextAnchor?.(target, command.anchor); } catch { /* unsupported layout mutation */ } }
++          break;
++        case "recomputeVisibility":
++          if (this.allow("visibility", 60, 1000)) try { (record.opts.recomputeVisibility || record.opts.markVisibilityDirty)?.(); } catch { /* no scene */ }
++          break;
++        case "transformDirty":
++          if (target && this.allow("transform-dirty", 120, 1000)) { try { record.opts.markTransformDirty?.(target); } catch { /* invalid layer id */ } }
++          break;
++        case "animation": {
++          const name = String(command.name || "").slice(0, 128);
++          const action = String(command.action || "");
++          if (!target || !["play", "pause", "stop", "setFrame", "setRate", "setTime", "playing"].includes(action) || !this.allow("animation", 120, 1000)) break;
++          const animation = (target.animations && target.animations[name]) || target.animationList?.find((item: any) => String(item?.name || "") === name) || record.opts.getSceneAnimation?.(name);
++          if (!animation) break;
++          try {
++            if (action === "playing") animation.playing = !!command.value;
++            else if (action === "setFrame") animation.setFrame?.(Number(command.value));
++            else if (action === "setRate") animation.setRate?.(Number(command.value));
++            else if (action === "setTime") animation.setTime?.(Number(command.value));
++            else animation[action]?.();
++          } catch { /* invalid animation command */ }
++          break;
++        }
++      }
++    }
++  }
++
++  private normalizedAssetPath(value: string): string | null {
++    if (value.length > 512 || value.includes("\0")) return null;
++    const normalized = value.replace(/\\/g, "/").trim();
++    if (!normalized || normalized.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(normalized) || /^[a-z]:\//i.test(normalized)) return null;
++    const segments = normalized.split("/").filter(Boolean);
++    if (!segments.length || segments.some((item) => item === "." || item === ".." || item.includes(":") || item.startsWith("."))) return null;
++    return segments.join("/");
++  }
++
++  private normalizeLayerConfig(value: any): any | null {
++    const config = safeValue(value);
++    if (!config || typeof config !== "object") return null;
++    try { if (new TextEncoder().encode(JSON.stringify(config)).byteLength > 256 * 1024) return null; }
++    catch { return null; }
++    const pathKeys = new Set(["image", "texture", "texturename", "model", "material", "particle", "video", "audio", "sound", "src", "path", "file"]);
++    let nodes = 0, valid = true;
++    const visit = (item: any, depth: number) => {
++      if (!valid || !item || typeof item !== "object") return;
++      if (++nodes > 8000 || depth > 12) { valid = false; return; }
++      if (Array.isArray(item)) { for (const child of item.slice(0, 4096)) visit(child, depth + 1); return; }
++      for (const [key, child] of Object.entries(item)) {
++        if (pathKeys.has(key.toLowerCase()) && typeof child === "string" && child.length) {
++          const normalized = this.normalizedAssetPath(child);
++          if (!normalized) { valid = false; return; }
++          item[key] = normalized;
++        } else if (child && typeof child === "object") visit(child, depth + 1);
++      }
++    };
++    visit(config, 0);
++    return valid ? config : null;
++  }
++
++  private mergeInto(target: Record<string, any>, source: any): void {
++    if (!source || typeof source !== "object") return;
++    for (const key of Object.keys(target)) if (!(key in source)) delete target[key];
++    for (const [key, value] of Object.entries(source)) {
++      if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
++      target[key] = safeValue(value);
++    }
++  }
++
++  private fail(message: string): void {
++    if (this.disabled || this.disposed) return;
++    this.disabled = true;
++    this.onFailure(message);
++    this.terminate(false);
++  }
++
++  private terminate(markDisposed = true): void {
++    if (this.active?.watchdog) clearTimeout(this.active.watchdog);
++    this.active = null; this.busy = false;
++    try { this.worker?.terminate(); } catch { /* already stopped */ }
++    this.worker = null;
++    if (markDisposed) this.disposed = true;
++    this.controls.length = 0; this.updates.clear();
++  }
++}
+diff --git a/renderer/src/scene-script-worker.ts b/renderer/src/scene-script-worker.ts
+new file mode 100644
+index 0000000..89f2664
+--- /dev/null
++++ b/renderer/src/scene-script-worker.ts
+@@ -0,0 +1,372 @@
++import "ses";
++import * as wtext from "../vendor/we-scene/render/text.js";
++
++type Message = Record<string, any>;
++type WorkerRecord = { id: string; kind: "text" | "object"; sandbox: any; opts: any; layer: any; shared: any; errors: any[]; commands: any[]; timerIds: Set<number>; invoke: (name: string, argsJson: string) => any; invokeCallback: (callback: any) => any; readShared: () => any };
++
++declare const lockdown: (options?: Record<string, unknown>) => void;
++const scope = globalThis as any;
++const hostPostMessage = scope.postMessage.bind(scope);
++const hostSetTimeout = scope.setTimeout.bind(scope);
++const hostClearTimeout = scope.clearTimeout.bind(scope);
++const hostSetInterval = scope.setInterval.bind(scope);
++const hostClearInterval = scope.clearInterval.bind(scope);
++const hostAddEventListener = scope.addEventListener.bind(scope);
++// A constructor escape into this Worker must not regain browser, network, timer,
++// or host-message capabilities. The module keeps private references for its bridge.
++for (const key of [
++  "postMessage", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "WebTransport", "Worker", "SharedWorker",
++  "BroadcastChannel", "MessageChannel", "MessagePort", "importScripts", "caches", "indexedDB", "navigator", "location",
++  "close", "onmessage", "addEventListener", "removeEventListener", "dispatchEvent", "setTimeout", "clearTimeout", "setInterval", "clearInterval",
++]) {
++  try { Object.defineProperty(scope, key, { value: undefined, writable: false, configurable: false }); }
++  catch { try { scope[key] = undefined; } catch { /* browser globals can be non-configurable */ } }
++}
++lockdown({ errorTaming: "safe", consoleTaming: "safe" });
++
++const MAX_TEXT = 64 * 1024;
++const MAX_NODES = 12000;
++const MAX_COMMANDS = 128;
++const LAYER_KEYS = [
++  "id", "name", "type", "destroyed", "parentId", "childIds", "hasChildren", "visible", "visibleSelf",
++  "origin", "localOrigin", "scale", "localScale", "angles", "localAngles", "size", "color", "alpha", "brightness",
++  "perspective", "solid", "rootmotion", "parallaxDepth", "text", "textPointsize", "textFont", "textColor", "textBackgroundcolor",
++  "textOpaquebackground", "textBackgroundbrightness", "textPadding", "textHAlign", "textVAlign", "textLimitwidth", "textMaxwidth",
++  "textLimitrows", "textMaxrows", "textLimituseellipsis", "textAnchor", "spriteFrameIndex", "spriteFrameCount", "spriteDuration",
++  "image", "textureName", "particle", "soundprops", "animations", "animationList", "animationLayers", "effects", "materialPasses",
++  "textureAnimation", "initialConfig", "attachment", "originalOrigin", "localAngles", "localScale", "localOrigin",
++];
++
++const cloneSafe = (value: any, depth = 0, seen = new WeakSet<object>(), budget = { nodes: 0 }): any => {
++  if (++budget.nodes > MAX_NODES || depth > 20) return undefined;
++  if (value == null || typeof value === "boolean") return value;
++  if (typeof value === "string") return value.length <= MAX_TEXT ? value : value.slice(0, MAX_TEXT);
++  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
++  if (typeof value !== "object" || seen.has(value)) return undefined;
++  seen.add(value);
++  if (ArrayBuffer.isView(value)) return Array.from(value as any).slice(0, 4096).map((v: any) => Number.isFinite(Number(v)) ? Number(v) : 0);
++  if (Array.isArray(value)) return value.slice(0, 4096).map((item) => cloneSafe(item, depth + 1, seen, budget));
++  const out: Record<string, any> = Object.create(null);
++  for (const key of Object.keys(value).slice(0, 4096)) {
++    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
++    const item = cloneSafe(value[key], depth + 1, seen, budget);
++    if (item !== undefined) out[key] = item;
++  }
++  return out;
++};
++
++const sceneLayers = new Map<string, any>();
++const layerIdentities = new WeakMap<object, string>();
++const records = new Map<string, WorkerRecord>();
++const timers = new Map<number, ReturnType<typeof setTimeout>>();
++let nextTimerId = 1;
++let generation = -1;
++let disabled = false;
++
++const layerId = (value: any) => value && typeof value === "object" ? layerIdentities.get(value) || String(value.id ?? "") : String(value ?? "");
++function mergeData(target: any, source: any): void {
++  if (!target || !source || typeof source !== "object") return;
++  for (const key of Object.keys(source)) {
++    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
++    target[key] = cloneSafe(source[key]);
++  }
++}
++function updateLayers(list: any[]): void {
++  if (!Array.isArray(list)) return;
++  for (const source of list.slice(0, 1600)) {
++    const key = layerId(source);
++    if (!key) continue;
++    let target = sceneLayers.get(key);
++    if (!target) { target = Object.create(null); sceneLayers.set(key, target); }
++    layerIdentities.set(target, key);
++    mergeData(target, source);
++  }
++}
++function snapshotLayer(source: any): any {
++  if (!source || typeof source !== "object") return null;
++  const out: Record<string, any> = Object.create(null);
++  for (const key of LAYER_KEYS) {
++    if (!(key in source)) continue;
++    if (key === "effects" && Array.isArray(source.effects)) {
++      out.effects = source.effects.slice(0, 128).map((effect: any) => {
++        const item = cloneSafe(effect);
++        if (item && typeof item === "object") delete item.script;
++        return item;
++      });
++    } else if (key === "textureAnimation") {
++      const state = source.textureAnimation;
++      if (state && typeof state === "object") out.textureAnimation = cloneSafe({ frame: state.frame, playing: state.playing, rate: state.rate, restart: state.restart, phase: state.phase });
++    } else out[key] = cloneSafe(source[key]);
++  }
++  return out;
++}
++function sceneLayerList(): any[] { return [...sceneLayers.values()].filter((item) => item && !item.destroyed); }
++function captureLayerState(): Map<string, any> {
++  const state = new Map<string, any>();
++  for (const [id, layer] of sceneLayers) state.set(id, snapshotLayer(layer));
++  return state;
++}
++function findLayer(arg: any, current: any): any {
++  if (typeof arg === "number") return sceneLayerList()[Math.trunc(arg)] || null;
++  if (arg && typeof arg === "object" && arg.id != null) return sceneLayers.get(String(arg.id)) || null;
++  const name = String(arg ?? "");
++  return (current && current.name === name ? current : null) || sceneLayerList().find((item) => item.name === name) || null;
++}
++function safeAssetPath(value: any): string | null {
++  if (typeof value !== "string" || value.length === 0 || value.length > 512 || value.includes("\0")) return null;
++  const path = value.replace(/\\/g, "/").trim();
++  if (!path || path.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(path) || /^[a-z]:\//i.test(path)) return null;
++  const parts = path.split("/").filter(Boolean);
++  if (!parts.length || parts.some((part) => part === "." || part === ".." || part.includes(":") || part.startsWith("."))) return null;
++  return parts.join("/");
++}
++function addCommand(record: WorkerRecord, command: any): void {
++  if (record.commands.length >= MAX_COMMANDS) return;
++  record.commands.push(cloneSafe(command));
++}
++function remoteAnimation(record: WorkerRecord, target: any, name: string): any {
++  const state = Object.create(null);
++  return {
++    name,
++    get playing() { return !!state.playing; },
++    set playing(value: unknown) { state.playing = !!value; addCommand(record, { kind: "animation", layerId: layerId(target), name, action: "playing", value: !!value }); },
++    play() { addCommand(record, { kind: "animation", layerId: layerId(target), name, action: "play" }); return this; },
++    pause() { addCommand(record, { kind: "animation", layerId: layerId(target), name, action: "pause" }); return this; },
++    stop() { addCommand(record, { kind: "animation", layerId: layerId(target), name, action: "stop" }); return this; },
++    setFrame(value: unknown) { addCommand(record, { kind: "animation", layerId: layerId(target), name, action: "setFrame", value: Number(value) || 0 }); return this; },
++    setRate(value: unknown) { addCommand(record, { kind: "animation", layerId: layerId(target), name, action: "setRate", value: Number(value) || 0 }); return this; },
++    setTime(value: unknown) { addCommand(record, { kind: "animation", layerId: layerId(target), name, action: "setTime", value: Number(value) || 0 }); return this; },
++    getTime() { return Number(state.time) || 0; },
++    getDuration() { return Number(state.duration) || 0; },
++  };
++}
++
++function buildOptions(record: WorkerRecord, context: any): any {
++  const current = sceneLayers.get(String(context.layerId)) || null;
++  const shared = record.shared;
++  const audioViews = new Map<number, any>();
++  for (const [key, value] of Object.entries(context.audio || {})) audioViews.set(Number(key), cloneSafe(value));
++  const inputView = cloneSafe(context.input || Object.create(null));
++  const options: any = {
++    ...cloneSafe(context.options || Object.create(null)),
++    layer: current,
++    shared,
++    inputView,
++    audioViews,
++    userProperties: cloneSafe(context.userProperties || Object.create(null)),
++    general: cloneSafe(context.general || Object.create(null)),
++    cameraTransforms: cloneSafe(context.cameraTransforms || Object.create(null)),
++    sceneLayers: sceneLayerList(),
++    enumerateSceneLayers: sceneLayerList,
++    getSceneLayer: (arg: any) => findLayer(arg, current),
++    getSceneLayerById: (id: any) => sceneLayers.get(String(id)) || null,
++    getInitialLayerConfig: (arg: any) => findLayer(arg, current)?.initialConfig || null,
++    getBoneOverrides: () => Object.create(null),
++    getLayerAttachmentIndex: () => -1,
++    getLayerAttachmentMatrix: () => null,
++    getSceneAnimation: (name: any) => remoteAnimation(record, current, String(name ?? "")),
++    getAnimationForProperty: () => remoteAnimation(record, current, String(context.field || "")),
++    setTextAnchor: (target: any, anchor: any) => addCommand(record, { kind: "textAnchor", layerId: layerId(target || current), anchor: String(anchor || "center") }),
++    recomputeVisibility: () => addCommand(record, { kind: "recomputeVisibility" }),
++    markVisibilityDirty: () => addCommand(record, { kind: "recomputeVisibility" }),
++    markTransformDirty: (target: any) => addCommand(record, { kind: "transformDirty", layerId: layerId(target || current) }),
++    sortSceneLayer: (target: any, index: any) => { addCommand(record, { kind: "sortLayer", layerId: layerId(target), index: Number(index) }); return true; },
++    setSceneLayerParent: (child: any, parent: any, attachment: any, adjust: any) => { addCommand(record, { kind: "setParent", layerId: layerId(child), parentId: parent?.id ?? parent ?? null, attachment: attachment ?? null, adjust: !!adjust }); return true; },
++    createSceneLayer: (config: any) => {
++      let safeConfig = config;
++      if (typeof config === "string") {
++        const path = safeAssetPath(config);
++        if (!path) return null;
++        safeConfig = path;
++      } else if (!config || typeof config !== "object") return null;
++      const id = Math.max(0, ...sceneLayerList().map((item) => Number(item.id) || 0)) + 1;
++      const layer = typeof safeConfig === "string" ? { id, name: "", image: safeConfig, origin: [0, 0, 0], localOrigin: [0, 0, 0], scale: [1, 1, 1], localScale: [1, 1, 1], angles: [0, 0, 0], localAngles: [0, 0, 0], size: [0, 0], visible: true, visibleSelf: true, alpha: 1, brightness: 1 } : { ...cloneSafe(safeConfig), id };
++      sceneLayers.set(String(id), layer);
++      layerIdentities.set(layer, String(id));
++      record.opts.sceneLayers = sceneLayerList();
++      addCommand(record, { kind: "createLayer", config: safeConfig, layerId: id });
++      return layer;
++    },
++    openUserShortcut: (name: any) => addCommand(record, { kind: "shortcut", name: String(name || "") }),
++    emitParticles: (target: any, count: any) => { addCommand(record, { kind: "emitParticles", layerId: layerId(target || current), count: Math.max(0, Math.min(256, Math.trunc(Number(count) || 0))) }); return 0; },
++    getParticleSystems: () => [],
++    mediaControl: {
++      skipNext: () => addCommand(record, { kind: "media", action: "skipNext" }),
++      skipPrevious: () => addCommand(record, { kind: "media", action: "skipPrevious" }),
++      play: () => addCommand(record, { kind: "media", action: "play" }),
++      pause: () => addCommand(record, { kind: "media", action: "pause" }),
++      playPause: () => addCommand(record, { kind: "media", action: "playPause" }),
++      snapshot: context.mediaSnapshot || null,
++    },
++    windowTitle: context.windowTitle || { title: "" },
++    onError: (error: unknown, phase?: unknown) => record.errors.push({ message: String((error as Error)?.message || error).slice(0, 160), phase: String(phase || "script") }),
++  };
++  const timer = (callback: any, delay: any, interval: boolean) => {
++    if (typeof callback !== "function" || timers.size >= 32 || record.timerIds.size >= 16) return () => {};
++    const timerId = nextTimerId++;
++    const safeDelay = Math.max(0, Math.min(60 * 60 * 1000, Number(delay) || 0));
++    const fire = () => {
++      if (disabled || !records.has(record.id)) return;
++      hostPostMessage({ type: "begin", generation, id: record.id, event: interval ? "timerInterval" : "timerTimeout" });
++      record.commands = []; record.errors = [];
++      const before = captureLayerState();
++      try {
++        const encoded = record.invokeCallback(callback);
++        const decoded = encoded === undefined ? undefined : JSON.parse(encoded);
++        const value = decoded && decoded.defined ? decoded.value : undefined;
++        hostPostMessage({ type: "result", generation, id: record.id, event: interval ? "timerInterval" : "timerTimeout", result: value, layers: collectLayerPatches(before), shared: record.readShared(), commands: record.commands, errors: record.errors });
++      } catch (error) {
++        hostPostMessage({ type: "result", generation, id: record.id, event: interval ? "timerInterval" : "timerTimeout", error: String((error as Error)?.message || error), errors: record.errors });
++      }
++      if (!interval) { timers.delete(timerId); record.timerIds.delete(timerId); }
++    };
++    const host = interval ? hostSetInterval(fire, safeDelay || 1) : hostSetTimeout(fire, safeDelay);
++    timers.set(timerId, host); record.timerIds.add(timerId);
++    const cancel = () => { const pending = timers.get(timerId); if (pending) hostClearTimeout(pending); timers.delete(timerId); record.timerIds.delete(timerId); };
++    return cancel;
++  };
++  options.setTimeout = (fn: any, delay: any) => timer(fn, delay, false);
++  options.setInterval = (fn: any, delay: any) => timer(fn, delay, true);
++  options.clearTimeout = (handle: any) => { if (typeof handle === "function") handle(); };
++  options.clearInterval = options.clearTimeout;
++  options.storage = undefined;
++  options.normalizeAssetPath = safeAssetPath;
++  return options;
++}
++
++function makeRecord(message: Message): WorkerRecord {
++  const record: WorkerRecord = {
++    id: message.id, kind: message.kind, sandbox: null, opts: Object.create(null), layer: null,
++    shared: Object.create(null), errors: [], commands: [], timerIds: new Set(),
++    invoke: () => undefined, invokeCallback: () => undefined, readShared: () => Object.create(null),
++  };
++  updateLayers(message.sceneLayers || []);
++  const context = message.context || Object.create(null);
++  mergeData(record.shared, context.shared);
++  const opts = buildOptions(record, context);
++  record.opts = opts;
++  record.layer = opts.layer;
++  const code = String(message.code || "");
++  record.sandbox = record.kind === "text"
++    ? wtext.evalTextScript(code, message.scriptProperties || {}, opts)
++    : wtext.evalObjectScript(code, message.scriptProperties || {}, opts);
++  if (!record.sandbox) throw new Error("SceneScript did not define a supported event.");
++  record.invoke = (name: string, argsJson: string) => record.sandbox._sceneScriptInvoke(name, argsJson);
++  record.invokeCallback = (callback: any) => record.sandbox._sceneScriptInvokeCallback(callback);
++  record.readShared = () => { try { return JSON.parse(record.sandbox._sceneScriptReadShared()); } catch { return cloneSafe(record.shared); } };
++  records.set(record.id, record);
++  return record;
++}
++
++function refreshRecord(record: WorkerRecord, context: any): void {
++  updateLayers(context.sceneLayers || []);
++  const target = sceneLayers.get(String(context.layerId)) || null;
++  record.layer = target;
++  record.opts.layer = target;
++  record.opts.sceneLayers = sceneLayerList();
++  mergeData(record.shared, context.shared);
++  for (const key of ["userProperties", "general", "cameraTransforms", "windowTitle", "mediaSnapshot"]) {
++    if (context[key] !== undefined) mergeData(record.opts[key] ||= Object.create(null), context[key]);
++  }
++  if (context.options) mergeData(record.opts, context.options);
++  if (context.input) {
++    const targetInput = record.opts.inputView ||= Object.create(null);
++    mergeData(targetInput, context.input);
++  }
++  if (context.audio) {
++    const audioViews = record.opts.audioViews as Map<number, any>;
++    for (const [key, value] of Object.entries(context.audio)) audioViews.set(Number(key), cloneSafe(value));
++  }
++  const engine = record.sandbox.engine;
++  if (engine && context.engine) {
++    for (const [key, value] of Object.entries(context.engine)) {
++      try { engine[key] = cloneSafe(value); } catch { /* read-only API field */ }
++    }
++  }
++  if (context.shared) {
++    try { record.sandbox._sceneScriptUpdateShared?.(JSON.stringify(context.shared)); } catch { /* bounded snapshot */ }
++  }
++}
++
++function collectLayerPatches(before: Map<string, any>): any[] {
++  const changes: any[] = [];
++  for (const id of [...sceneLayers.keys()].slice(0, 1600)) {
++    const layer = sceneLayers.get(id);
++    const snapshot = snapshotLayer(layer);
++    const previous = before.get(id);
++    if (!snapshot || !previous) continue;
++    if (String(snapshot.id) !== id || String(previous.id) !== id) continue;
++    const patch: Record<string, any> = { id: Number(id) };
++    for (const key of Object.keys(snapshot)) {
++      if (key === "id") continue;
++      let left: string, right: string;
++      try { left = JSON.stringify(previous[key]); right = JSON.stringify(snapshot[key]); }
++      catch { continue; }
++      if (left !== right) patch[key] = snapshot[key];
++    }
++    if (Object.keys(patch).length > 1) changes.push(patch);
++  }
++  return changes;
++}
++
++function runEvent(message: Message): void {
++  if (disabled || message.generation !== generation) return;
++  const record = records.get(String(message.id));
++  if (!record) return;
++  hostPostMessage({ type: "begin", generation, id: record.id, event: String(message.event || "unknown") });
++  record.commands = []; record.errors = [];
++  try {
++    refreshRecord(record, message.context || Object.create(null));
++    const before = captureLayerState();
++    const sandbox = record.sandbox;
++    const args = Array.isArray(message.args) ? message.args : [];
++    let result: any;
++    switch (message.event) {
++      case "init": result = sandbox.init(args[0]); break;
++      case "applyUserProperties": sandbox.applyUserProperties(args[0] || {}); break;
++      case "applyGeneralSettings": sandbox.applyGeneralSettings(args[0] || {}); break;
++      case "cursorClick": case "cursorEnter": case "cursorLeave": case "cursorDown": case "cursorUp": case "cursorMove":
++        result = sandbox.callCursor(message.event, args[0]); break;
++      case "mediaPropertiesChanged": case "mediaThumbnailChanged": case "mediaPlaybackChanged": case "mediaTimelineChanged": case "mediaStatusChanged": case "mediaLyricsChanged":
++        result = sandbox.callMedia(message.event, args[0]); break;
++      case "animationEvent": result = sandbox.callAnimationEvent(args[0], args[1]); break;
++      case "resizeScreen": result = sandbox.callResize(Number(args[0]) || 0, Number(args[1]) || 0); break;
++      case "destroy": sandbox.destroy(); break;
++      case "update": result = message.raw ? sandbox.callUpdateRaw(args[0]) : sandbox.callUpdate(args[0]); break;
++      default: throw new Error("Unsupported SceneScript event.");
++    }
++    hostPostMessage({ type: "result", generation, id: record.id, event: message.event, result: cloneSafe(result), layers: collectLayerPatches(before), shared: record.readShared(), commands: record.commands, errors: record.errors });
++  } catch (error) {
++    hostPostMessage({ type: "result", generation, id: record.id, event: message.event, error: String((error as Error)?.message || error).slice(0, 200), layers: [], shared: record.readShared(), commands: record.commands, errors: record.errors });
++  }
++}
++
++const handleMessage = (event: MessageEvent<Message>) => {
++  const message = event.data;
++  if (!message || typeof message !== "object") return;
++  if (message.type === "register") {
++    if (generation !== -1 && generation !== message.generation) return;
++    generation = message.generation;
++    try {
++      hostPostMessage({ type: "begin", generation, id: message.id, event: "initialization" });
++      makeRecord(message);
++      hostPostMessage({ type: "result", generation, id: message.id, event: "initialization", ok: true });
++    } catch (error) {
++      hostPostMessage({ type: "result", generation, id: message.id, event: "initialization", error: String((error as Error)?.message || error).slice(0, 200) });
++    }
++  } else if (message.type === "task") runEvent(message);
++  else if (message.type === "tick") {
++    if (generation !== message.generation || disabled || !Array.isArray(message.events)) return;
++    updateLayers(message.sceneLayers || []);
++    for (const item of message.events.slice(0, 64)) runEvent({ ...item, generation, event: "update", context: item.context || Object.create(null) });
++    hostPostMessage({ type: "done", generation, batch: "tick" });
++  } else if (message.type === "dispose") {
++    disabled = true;
++    for (const timer of timers.values()) { hostClearTimeout(timer); hostClearInterval(timer as any); }
++    timers.clear(); records.clear(); sceneLayers.clear();
++    hostPostMessage({ type: "done", generation, batch: "dispose" });
++  }
++};
++hostAddEventListener("message", handleMessage);
++
++export {};
+diff --git a/renderer/src/shell.ts b/renderer/src/shell.ts
+index 5e4a7e1..c83fb29 100644
+--- a/renderer/src/shell.ts
++++ b/renderer/src/shell.ts
+@@ -156,6 +156,7 @@ export type Runtime = {
+     pause(): void;
+     resume(): void;
+     applyUserProperties(props: Record<string, { value: unknown }>): void;
++    applyGeneralSettings?(settings: Record<string, unknown>): void;
+     /** 性能设置热更（抗锯齿/粒子/后处理档位，就地生效不重挂载） */
+     setQuality?(q: QualityOptions): void;
+     /** 视频纹理上传倍率热更（0=自动交给帧率守门，>0 固定；显式值优先于自动下坡） */
+diff --git a/renderer/vendor/we-scene/render/text.js b/renderer/vendor/we-scene/render/text.js
+index 704ea3b..cc40e96 100644
+--- a/renderer/vendor/we-scene/render/text.js
++++ b/renderer/vendor/we-scene/render/text.js
+@@ -177,6 +177,10 @@ class Vec3 {
+       this.y = Number(y) || 0
+       this.z = Number(z) || 0
+     }
++    // SceneScript receives these values across a SES compartment boundary. An
++    // own, non-callable constructor prevents a value snapshot from exposing the
++    // worker realm's Function constructor through `value.constructor.constructor`.
++    Object.defineProperty(this, 'constructor', { value: undefined, enumerable: false })
+   }
+   static fromSpherical(r, theta, phi) {
+     const t = theta * VEC_D2R
+@@ -455,9 +459,9 @@ function makeInput(pointerView) {
+   if (pointerView && pointerView.cursorWorldPosition) return pointerView
+   return {
+     cursorWorldPosition: new Vec3(0, 0, 0),
+-    cursorScreenPosition: new Vec3(0, 0, 0),
+-    cursorPosition: new Vec3(0, 0, 0),
+-    cursorPositionLast: new Vec3(0, 0, 0),
++    cursorScreenPosition: new Vec2(0, 0),
++    cursorPosition: new Vec2(0, 0),
++    cursorPositionLast: new Vec2(0, 0),
+     cursorLeftDown: false,
+   }
+ }
+@@ -485,9 +489,9 @@ export function makeCursorEventVec(x, y, z) {
+ export function createInputView() {
+   const view = {
+     cursorWorldPosition: new Vec3(0, 0, 0),
+-    cursorScreenPosition: new Vec3(0, 0, 0),
+-    cursorPosition: new Vec3(0, 0, 0),
+-    cursorPositionLast: new Vec3(0, 0, 0),
++    cursorScreenPosition: new Vec2(0, 0),
++    cursorPosition: new Vec2(0, 0),
++    cursorPositionLast: new Vec2(0, 0),
+     cursorLeftDown: false,
+   }
+   /** @param {{wx:number,wy:number,originY?:number|null,screenX:number,screenY:number,u:number,v:number,lastU:number,lastV:number,leftDown:boolean}} p */
+@@ -739,8 +743,63 @@ export function scriptErrorLine(err) {
+ 
+ function compileSandboxBody(script) {
+   // 只编译不调用：顶层代码一行都不执行
+-  // eslint-disable-next-line no-new-func
+-  new Function(...SANDBOX_PARAM_NAMES, SANDBOX_PRELUDE + scriptToFunctionBody(script))
++  const compartment = typeof globalThis.Compartment === 'function' ? new globalThis.Compartment() : null
++  if (compartment) compartment.evaluate(`(function(${SANDBOX_PARAM_NAMES.join(',')}) { ${SANDBOX_PRELUDE}${scriptToFunctionBody(script)} })`)
++  else {
++    // Syntax-only fallback for the synchronous editor checker. This compiles a
++    // function body without invoking it; wallpaper scripts are always run by the
++    // SES worker path below, never by this checker.
++    // eslint-disable-next-line no-new-func
++    new Function(...SANDBOX_PARAM_NAMES, SANDBOX_PRELUDE + scriptToFunctionBody(script))
++  }
++}
++
++const SCRIPT_HOOK_NAMES = [
++  'update', 'init', 'applyUserProperties', 'cursorClick', 'cursorEnter', 'cursorLeave', 'cursorDown', 'cursorUp', 'cursorMove',
++  ...MEDIA_CALLBACKS, 'animationEvent', 'resizeScreen', 'destroy', 'applyGeneralSettings',
++]
++
++function compileSandboxFactory(body, params) {
++  if (typeof globalThis.Compartment !== 'function' || typeof globalThis.harden !== 'function') {
++    throw new Error('SceneScript requires the hardened worker runtime.')
++  }
++  const compartment = new globalThis.Compartment()
++  const hooks = SCRIPT_HOOK_NAMES.map((name) => `${name}: typeof ${name} === "function" ? ${name} : null`).join(',')
++  const factorySource = `(function(${params.join(',')}) { ${SANDBOX_PRELUDE}${body}; const __sceneHooks = {${hooks}}; return {
++    ...__sceneHooks,
++    _invoke: (name, serialized) => { const fn = __sceneHooks[name]; if (typeof fn !== 'function') return JSON.stringify({ defined: false }); const args = JSON.parse(serialized); if (args[0] && typeof args[0] === 'object' && args[0].worldPosition && typeof args[0].worldPosition === 'object') { const p = args[0].worldPosition; args[0].worldPosition = new Vec3(p.x || 0, p.y || 0, p.z || 0); } if (name === 'resizeScreen' && args[0] && typeof args[0] === 'object') args[0] = new Vec3(args[0].x || 0, args[0].y || 0, args[0].z || 0); if ((name === 'init' || name === 'update' || name === 'animationEvent') && args[0] && typeof args[0] === 'object' && 'x' in args[0] && 'y' in args[0] && 'z' in args[0]) args[0] = new Vec3(args[0].x, args[0].y, args[0].z); const value = fn(...args); return JSON.stringify({ defined: value !== undefined, value }); },
++    _invokeCallback: (fn) => { const value = fn(); return JSON.stringify({ defined: value !== undefined, value }); },
++    _readShared: () => JSON.stringify(shared),
++    _updateShared: (serialized) => { const next = JSON.parse(serialized); for (const key of Object.keys(shared)) if (!(key in next) && typeof shared[key] !== 'function') delete shared[key]; for (const key of Object.keys(next)) shared[key] = next[key]; },
++    _source: (name) => { const fn = __sceneHooks[name]; return typeof fn === 'function' ? Function.prototype.toString.call(fn) : ''; },
++  }; })`
++  const factoryInCompartment = compartment.evaluate(factorySource)
++  const parseJSON = compartment.evaluate('(serialized) => JSON.parse(serialized)')
++  const sharedIndex = params.indexOf('shared')
++  const factory = (...args) => {
++    // Shared data is copied into the compartment realm so it never retains a
++    // prototype or accessor from the worker host.
++    if (sharedIndex >= 0) args[sharedIndex] = parseJSON(safeSharedJSON(args[sharedIndex]))
++    return factoryInCompartment(...args)
++  }
++  return { compartment, factory, parseJSON }
++}
++
++function safeSharedJSON(shared) {
++  try { return JSON.stringify(shared && typeof shared === 'object' ? shared : {}) || '{}' }
++  catch { return '{}' }
++}
++
++function hardenBridgeObject(value) {
++  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return value
++  try { Object.setPrototypeOf(value, null) } catch { /* immutable bridge values are still confined */ }
++  try {
++    for (const key of Object.keys(value)) {
++      const item = value[key]
++      if (typeof item === 'function') globalThis.harden(item)
++    }
++  } catch { /* accessor side effects are intentionally ignored */ }
++  return value
+ }
+ 
+ /**
+@@ -964,6 +1023,14 @@ function engineCanvasSize(cs) {
+  */
+ export function evalTextScript(script, scriptprops, opts = {}) {
+   if (typeof script !== 'string' || script.length === 0) return null
++  if (opts.sceneScriptRuntime && typeof opts.sceneScriptRuntime.createSandbox === 'function') {
++    return opts.sceneScriptRuntime.createSandbox('text', script, scriptprops, opts)
++  }
++  if (typeof globalThis.Compartment !== 'function' || typeof globalThis.harden !== 'function') {
++    const error = new Error('SceneScript execution requires the isolated hardened worker runtime.')
++    if (opts.onError) opts.onError(error, 'runtime')
++    return null
++  }
+   // ES module → 函数体：剥 import / export 声明符。export 不总在行首（压缩过的脚本
+   // 形如 `"use strict";export var ...`），故按「前导符 + export + 声明关键字」全局匹配，
+   // 前导符保留。import 按完整语法剥（import 'x' / import * as X from 'x'）。
+@@ -976,7 +1043,7 @@ export function evalTextScript(script, scriptprops, opts = {}) {
+   // scriptProperties：scene 值优先，createScriptProperties 的 add* 只补缺省。
+   // 声明链在模块体执行时立刻跑完并 finish()，返回的就是这个对象 —— update() 闭包
+   // 捕获的是参数绑定，此后对它的原地增补对脚本可见。
+-  const spValues = {}
++  const spValues = Object.create(null)
+   if (scriptprops && typeof scriptprops === 'object') {
+     // 文字路径此前只 unwrap .value（恒快照）：user 绑定键同样走活代理。
+     for (const [k, v] of Object.entries(scriptprops)) defineLiveScriptProp(spValues, k, v, opts.userProperties)
+@@ -1005,6 +1072,7 @@ export function evalTextScript(script, scriptprops, opts = {}) {
+       return undefined
+     },
+   })
++  try { Object.setPrototypeOf(builder, null) } catch { /* capability stays confined to the worker */ }
+ 
+   const thisLayer = {
+     // [we-scene patch] update 的 value 链从**空串**起步（脚本有 update 时才如此，
+@@ -1065,21 +1133,34 @@ export function evalTextScript(script, scriptprops, opts = {}) {
+       enumerable: true,
+       configurable: true,
+     })
+-    // 文字层同为 ILayer：getParent/getChildren/getEffect/getAnimation… 借对象代理的实现
+-    // （3802432712 的 Song Title 在 text 脚本里 `thisLayer.getParent()`）。只补方法，
+-    // 不覆盖上面的快照/写穿字段。
++    // ITextLayer.color is a Vec3 value; component writes must reach the actual
++    // layer so the next text paint sees them.
++    Object.defineProperty(thisLayer, 'color', {
++      get: () => makeLiveVec3(() => L.textColor || L.color || [1, 1, 1], (v) => {
++        L.textColor = normVec(v)
++        L.color = normVec(v)
++      }),
++      set: (v) => { L.textColor = normVec(v); L.color = normVec(v) },
++      enumerable: true,
++      configurable: true,
++    })
++    // Keep the documented layer transforms and text style fields live in both
++    // object and text scripts. Previously the text script held detached values,
++    // so visible/origin/scale and most ITextLayer writes never reached rendering.
+     const objProxy = makeObjectLayerProxy(L, opts)
++    const textOwned = new Set(['text', 'font', 'pointsize', 'color'])
+     for (const k of Object.getOwnPropertyNames(objProxy)) {
+-      if (k in thisLayer) continue
++      if (textOwned.has(k)) continue
+       const d = Object.getOwnPropertyDescriptor(objProxy, k)
+-      if (d && typeof d.value === 'function') thisLayer[k] = d.value
++      if (!d) continue
++      Object.defineProperty(thisLayer, k, { ...d, configurable: true })
+     }
+   }
+   const engine = {
+     // [we-scene patch] registerAsset 必须把路径**原样返回**：脚本拿到的返回值
+     // 会直接喂给 thisScene.createLayer（1712475860 的金币 coinget）。
+     // 旧 no-op 返回 undefined → createLayer(undefined) 造出无贴图空层，金币永远不显示。
+-    registerAsset: (p) => p,
++    registerAsset: (p) => opts.normalizeAssetPath ? opts.normalizeAssetPath(p) : (typeof p === 'string' ? p : undefined),
+     frametime: 1 / 60,
+     runtime: 0,
+     canvasSize: engineCanvasSize(opts.canvasSize),
+@@ -1129,79 +1210,34 @@ export function evalTextScript(script, scriptprops, opts = {}) {
+     }
+     return v
+   }
+-  const thisScene = {
+-    getLayer(name) {
+-      const t = opts.getLayerText ? opts.getLayerText(String(name)) : undefined
+-      return { text: t !== undefined && t !== null ? String(t) : '' }
+-    },
+-    // WE 支持脚本运行时建层（官方 3D 时钟阴影脚本用它造影子层）。渲染器不支持
+-    // 动态建层：返回一个可写属性的哑层，脚本逻辑照常走完，影子层内容被忽略 ——
+-    // 主文本正确，动态影子降级为无。
+-    createLayer(def) {
+-      void def
+-      return {
+-        text: '', visible: false, color: [0, 0, 0], alpha: 1,
+-        pointsize: opts.pointsize || 24, font: opts.font || '',
+-        origin: makeVec3(opts.origin || [0, 0, 0]),
+-        angles: [0, 0, 0], scale: [1, 1, 1],
+-      }
+-    },
+-    sortLayer: () => {},
+-    getLayerIndex: () => 0,
+-  }
++  // Text scripts get the same scene API as object scripts. The host callbacks are
++  // late-bound so deferred init can create, sort, and destroy live scene layers.
++  const thisScene = makeThisScene({
++    ...opts,
++    workshopId: opts.workshopId != null ? opts.workshopId : extractWorkshopId(script),
++    getWorkshopId: () => opts.workshopId != null ? opts.workshopId : extractWorkshopId(script),
++  })
+   // shared：WE 的跨脚本共享状态对象（同场景全部文字脚本共用一份，一脚本写、其它读）
+   const shared = opts.shared || {}
+   // 消毒全局对象：globalThis/self/window 都指向它。语料里的反调试脚本会
+   // `(function(){return this})()` 或 `window` 找全局再覆写 console —— 拿到的是这份
+   // 每次求值独立的 sterile 对象，宿主全局不可达、覆写也不外泄。
+-  const sandboxGlobal = { console: makeSandboxConsole() }
++  const sandboxGlobal = Object.create(null)
++  sandboxGlobal.console = makeSandboxConsole()
+   // [we-scene patch] input 由宿主注入共享视图（每帧就地重填），未注入时退化为全 0
+   const input = makeInput(opts.inputView)
+ 
+   let fns
++  let rawFns
++  let compiled
+   try {
+     // 宿主全局一律用参数遮蔽：脚本跑在 new Function 的全局作用域里，能摸到
+     // window/document/console/process 等。实测语料里有反调试脚本把 console.log
+     // 整个换成 no-op，污染宿主；这里除 console（给静音副本）外全部遮成 undefined。
+     // Function/eval 无法遮蔽（保留字语义），属已知边界：WE 本身也是全信任执行脚本。
+-    const factory = new Function(
+-      'scriptProperties', 'engine', 'thisLayer', 'thisScene', 'WEMath', 'WEColor', 'WEVector', 'createScriptProperties', 'shared',
+-      'console', 'process', 'globalThis', 'self', 'window', 'document', 'require', 'module', 'exports',
+-      'fetch', 'XMLHttpRequest', 'Worker', 'importScripts', 'location', 'navigator',
+-      'alert', 'confirm', 'prompt', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+-      'requestAnimationFrame', 'cancelAnimationFrame', 'performance', 'Function',
+-      'Vec3', 'Vec2', 'Vec4', 'input',
+-      'MediaPlaybackEvent', 'localStorage',
+-      // [we-scene patch] 别名注入：2955378002 的脚本把 localStorage 写成小写
+-      // `localstorage`（作者笔误），WE 侧可运行而这里会 ReferenceError 熔断该入口。
+-      '"use strict";\nvar localstorage = localStorage;\n' + body +
+-      '\n;return {' +
+-      'update: typeof update === "function" ? update : null,' +
+-      'init: typeof init === "function" ? init : null,' +
+-      'applyUserProperties: typeof applyUserProperties === "function" ? applyUserProperties : null,' +
+-      // [we-scene patch] WE 的 6 个指针回调。全库 267 处挂钩（Click 89 / Enter 52 /
+-      // Leave 52 / Down 26 / Up 26 / Move 22，跨 19 个壁纸）—— 这是 WE 场景互动的
+-      // **主入口**，比 input.cursor*（仅 18 个脚本）大一个数量级。
+-      // 事件对象只需 { worldPosition: Vec3 }：全库 51 处引用 event.worldPosition，
+-      // 无一处读 event.button / screenPosition / delta。
+-      'cursorClick: typeof cursorClick === "function" ? cursorClick : null,' +
+-      'cursorEnter: typeof cursorEnter === "function" ? cursorEnter : null,' +
+-      'cursorLeave: typeof cursorLeave === "function" ? cursorLeave : null,' +
+-      'cursorDown: typeof cursorDown === "function" ? cursorDown : null,' +
+-      'cursorUp: typeof cursorUp === "function" ? cursorUp : null,' +
+-      'cursorMove: typeof cursorMove === "function" ? cursorMove : null,' +
+-      // [we-scene patch] 媒体回调。此前只收了 mediaPropertiesChanged，且收完
+-      // 没有出口（只在「脚本是否为空」的判据里出现过一次），等于没实现。
+-      // 歌名/歌手文字层就靠这一条：`export function mediaPropertiesChanged(e){ mediaData = e.title }`
+-      // 是全库 44 处文字脚本的标准形态。
+-      MEDIA_CALLBACKS.map((n) => `${n}: typeof ${n} === "function" ? ${n} : null,`).join('') +
+-      // [we-scene patch] 官方 AnimationEvent 消费口（同对象路径，见那里的注释）。
+-      'animationEvent: typeof animationEvent === "function" ? animationEvent : null,' +
+-      // [we-scene patch] resizeScreen(size)（同对象路径；3396722575 自适应缩放）。
+-      'resizeScreen: typeof resizeScreen === "function" ? resizeScreen : null,' +
+-      'dummy_: 0' +
+-      '};',
+-    )
++    const textParams = ['scriptProperties', 'engine', 'thisLayer', 'thisScene', 'WEMath', 'WEColor', 'WEVector', 'createScriptProperties', 'shared', 'console', 'process', 'globalThis', 'self', 'window', 'document', 'require', 'module', 'exports', 'fetch', 'XMLHttpRequest', 'Worker', 'importScripts', 'location', 'navigator', 'alert', 'confirm', 'prompt', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance', 'Function', 'Vec3', 'Vec2', 'Vec4', 'input', 'MediaPlaybackEvent', 'localStorage']
++    compiled = compileSandboxFactory(body, textParams)
++    const factory = compiled.factory
+     fns = factory(
+       spValues, wrapEngine(engine), thisLayer, thisScene, WEMATH, WECOLOR, WEVECTOR, builder, shared,
+       sandboxGlobal.console, undefined, sandboxGlobal, sandboxGlobal, sandboxGlobal,
+@@ -1218,10 +1254,19 @@ export function evalTextScript(script, scriptprops, opts = {}) {
+       // 「记住状态」类文字脚本（时钟制式记忆）ReferenceError 熔断。
+       opts.storage || makeSandboxStorage(),
+     )
++    rawFns = fns
+   } catch (e) {
+     if (opts.onError) opts.onError(e, 'parse')
+     return null
+   }
++  const invokeScript = (name, args) => {
++    if (!rawFns || typeof rawFns._invoke !== 'function') return undefined
++    const result = JSON.parse(rawFns._invoke(name, JSON.stringify(args || [])))
++    return result && result.defined ? result.value : undefined
++  }
++  const rawHooks = rawFns
++  fns = Object.create(null)
++  for (const name of [...SCRIPT_HOOK_NAMES]) fns[name] = rawHooks?.[name] ? (...args) => invokeScript(name, args) : null
+   const hasMediaHook = !!(fns && MEDIA_CALLBACKS.some((n) => fns[n]))
+   // [we-scene patch] 纯 applyUserProperties 脚本也没有 update：2847470774 的颜色常量
+   // 只导出 `applyUserProperties(changed){ thisObject.color = shared.accentColor }`，
+@@ -1234,7 +1279,9 @@ export function evalTextScript(script, scriptprops, opts = {}) {
+   // 3405117965 的 LED 矩阵按画布重排）。首帧也派发一次，因此纯 resize 脚本
+   // 没有任何逐帧消费者，不进 update 队列，只在尺寸变化时由宿主调 callResize。
+   const hasResizeHook = !!(fns && typeof fns.resizeScreen === 'function')
+-  if (!fns || (!fns.update && !hasMediaHook && !hasApplyHook && !hasAnimEventHook && !hasResizeHook)) return null
++  const hasDestroyHook = !!(fns && typeof fns.destroy === 'function')
++  const hasGeneralSettingsHook = !!(fns && typeof fns.applyGeneralSettings === 'function')
++  if (!fns || (!fns.update && !hasMediaHook && !hasApplyHook && !hasAnimEventHook && !hasResizeHook && !hasDestroyHook && !hasGeneralSettingsHook)) return null
+   // [we-scene patch] update 的首帧 value 语义按脚本形态区分：
+   //  - 写回式（打字机模板）：update 把入参 value 当作**累积中的当前文本读入**
+   //    （addLastChar(value) / handleBlinker(value) / queuedWord===value），返回值
+@@ -1247,7 +1294,7 @@ export function evalTextScript(script, scriptprops, opts = {}) {
+   // 会误判（3379996991 的 Clock/Date 曾因此被清空不显示）。
+   const updateIsWriteback = (() => {
+     if (!fns.update) return false
+-    const src = Function.prototype.toString.call(fns.update)
++    const src = rawFns && rawFns._source ? rawFns._source('update') : ''
+     // 只分析函数体（首个 { 到末尾 }），形参声明在签名里、不算「读」
+     const bodyStart = src.indexOf('{')
+     if (bodyStart < 0) return false
+@@ -1271,6 +1318,10 @@ export function evalTextScript(script, scriptprops, opts = {}) {
+   if (fns.update && updateIsWriteback) thisLayer.text = ''
+ 
+   const sandbox = {
++    _sceneScriptInvoke: (name, serialized) => rawFns._invoke(name, serialized),
++    _sceneScriptInvokeCallback: (callback) => rawFns._invokeCallback(callback),
++    _sceneScriptReadShared: () => rawFns._readShared(),
++    _sceneScriptUpdateShared: (serialized) => rawFns._updateShared(serialized),
+     engine,
+     thisLayer,
+     scriptProperties: spValues,
+@@ -1281,6 +1332,8 @@ export function evalTextScript(script, scriptprops, opts = {}) {
+     // [we-scene patch] 是否挂了媒体回调（宿主据此建广播表）
+     hasMediaHook,
+     hasApplyHook,
++    hasDestroyHook,
++    hasGeneralSettingsHook,
+     // [we-scene patch] 是否导出 animationEvent（宿主按图层级广播派发帧事件）
+     hasAnimEventHook,
+     // [we-scene patch] 是否导出 resizeScreen（画布尺寸变化时宿主派发）
+@@ -1306,6 +1359,17 @@ export function evalTextScript(script, scriptprops, opts = {}) {
+       if (!fns.applyUserProperties) return
+       try { fns.applyUserProperties(props || {}) } catch (e) { sandbox.errCount++; if (opts.onError) opts.onError(e, 'applyUserProperties') }
+     },
++    applyGeneralSettings(settings) {
++      if (!fns.applyGeneralSettings) return
++      try { fns.applyGeneralSettings(settings || {}) } catch (e) { noteEntryErr('generalSettings', e) }
++    },
++    destroy() {
++      if (sandbox.destroyCalled) return
++      sandbox.destroyCalled = true
++      if (!fns.destroy) return
++      try { fns.destroy() } catch (e) { sandbox.errCount++; if (opts.onError) opts.onError(e, 'destroy') }
++    },
++    destroyCalled: false,
+     /** 直调 update 不做文本加工：层可见性脚本（visible.script）要拿原始返回值
+      *  ——布尔控可见，callUpdate 会把它吞成 null（防画到画面上的文字版语义）。 */
+     callUpdateRaw(value) {
+@@ -1934,6 +1998,12 @@ function makeEffectHandle(eff, opts) {
+  */
+ function resolveDestroyTarget(arg, opts) {
+   if (arg == null) return null
++  const layers = opts && typeof opts.enumerateSceneLayers === 'function'
++    ? opts.enumerateSceneLayers()
++    : []
++  if (typeof arg === 'number' && Number.isFinite(arg)) {
++    return layers[Math.trunc(arg)] || null
++  }
+   const lookup = (name) => {
+     if (!name) return null
+     if (opts && typeof opts.getSceneLayer === 'function') {
+@@ -1959,11 +2029,15 @@ function resolveDestroyTarget(arg, opts) {
+ }
+ 
+ function markLayerDestroyed(layer, opts) {
+-  if (!layer) return
++  if (!layer || layer.destroyed) return false
+   layer.visibleSelf = false
+   layer.visible = false
+   layer.destroyed = true
++  if (opts && typeof opts.onDestroySceneLayer === 'function') {
++    try { opts.onDestroySceneLayer(layer) } catch { /* teardown stays best-effort */ }
++  }
+   if (opts && typeof opts.recomputeVisibility === 'function') opts.recomputeVisibility()
++  return true
+ }
+ 
+ /**
+@@ -2017,6 +2091,19 @@ function makeThisScene(opts) {
+   // 只解析一次，稳态零额外开销。
+   const proxyCacheOff = globalThis.__noProxyCache === true
+   const proxyCache = new WeakMap()
++  const layers = () => typeof opts.enumerateSceneLayers === 'function' ? opts.enumerateSceneLayers() : []
++  const resolveLayer = (arg) => {
++    if (typeof arg === 'number' && Number.isFinite(arg)) return layers()[Math.trunc(arg)] || null
++    if (arg && typeof arg === 'object') {
++      const id = Number(arg.id)
++      if (Number.isFinite(id) && typeof opts.getSceneLayerById === 'function') {
++        return opts.getSceneLayerById(id) || null
++      }
++      if (arg.name != null && typeof opts.getSceneLayer === 'function') return opts.getSceneLayer(String(arg.name)) || null
++      return null
++    }
++    return typeof opts.getSceneLayer === 'function' ? opts.getSceneLayer(String(arg ?? '')) || null : null
++  }
+   const layerProxy = (layer) => {
+     if (proxyCacheOff || !layer) return makeObjectLayerProxy(layer || null, opts)
+     let p = proxyCache.get(layer)
+@@ -2026,12 +2113,10 @@ function makeThisScene(opts) {
+     }
+     return p
+   }
+-  return {
++  const scene = {
+     getLayer(name) {
+-      if (opts.getSceneLayer) {
+-        const l = opts.getSceneLayer(String(name))
+-        if (l && !l.destroyed) return layerProxy(l)
+-      }
++      const l = resolveLayer(name)
++      if (l && !l.destroyed) return layerProxy(l)
+       return layerProxy(null)
+     },
+     createLayer(cfg) {
+@@ -2047,16 +2132,20 @@ function makeThisScene(opts) {
+       if (created) return layerProxy(created)
+       return layerProxy(null)
+     },
+-    destroyLayer(arg) { markLayerDestroyed(resolveDestroyTarget(arg, opts), opts) },
+-    sortLayer: () => {},
++    destroyLayer(arg) { return markLayerDestroyed(resolveDestroyTarget(arg, opts), opts) },
++    sortLayer(arg, index) {
++      const layer = resolveLayer(arg)
++      return typeof opts.sortSceneLayer === 'function' && layer
++        ? !!opts.sortSceneLayer(layer, Number(index))
++        : false
++    },
+     getLayerIndex(arg) {
+-      const list = typeof opts.enumerateSceneLayers === 'function' ? opts.enumerateSceneLayers() : []
+-      const name = arg && typeof arg === 'object' ? arg.name : String(arg || '')
+-      const i = list.findIndex((l) => l && l.name === name)
+-      return i < 0 ? 0 : i
++      const layer = resolveLayer(arg)
++      const i = layer ? layers().indexOf(layer) : -1
++      return i
+     },
+     enumerateLayers() {
+-      const list = typeof opts.enumerateSceneLayers === 'function' ? opts.enumerateSceneLayers() : []
++      const list = layers()
+       const out = []
+       for (const l of list) {
+         if (l && !l.destroyed) out.push(layerProxy(l))
+@@ -2123,7 +2212,68 @@ function makeThisScene(opts) {
+       const layer = resolveDestroyTarget(arg, opts)
+       return layer || null
+     },
++    getLayerCount() { return layers().filter((l) => l && !l.destroyed).length },
++    createModelData(configuration) {
++      return typeof opts.createSceneModelData === 'function'
++        ? opts.createSceneModelData(configuration)
++        : null
++    },
++    destroyModelData(handle) {
++      if (typeof opts.destroySceneModelData === 'function') return opts.destroySceneModelData(handle)
++      if (handle && typeof handle === 'object' && typeof handle.destroy === 'function') return handle.destroy()
++      return false
++    },
++  }
++  // IScene exposes scene-wide settings as live properties. Preserve the JSON wrapper shape
++  // (script/animation/user-bound fields store their runtime value in `.value`).
++  const generalFields = [
++    'bloom', 'bloomstrength', 'bloomthreshold', 'clearenabled', 'clearcolor',
++    'ambientcolor', 'skylightcolor', 'fov', 'nearz', 'farz', 'camerafade',
++    'camerashake', 'camerashakespeed', 'camerashakeamplitude', 'camerashakeroughness',
++    'cameraparallax', 'cameraparallaxamount', 'cameraparallaxdelay', 'cameraparallaxmouseinfluence',
++  ]
++  const vectorFields = new Set(['clearcolor', 'ambientcolor', 'skylightcolor'])
++  const generalValue = (key) => {
++    const g = opts.general || {}
++    const entry = g[key]
++    const value = entry && typeof entry === 'object' && 'value' in entry ? entry.value : entry
++    if (!vectorFields.has(key)) return value
++    return makeLiveVec3(
++      () => {
++        const current = g[key]
++        return normVec(current && typeof current === 'object' && 'value' in current ? current.value : current)
++      },
++      (next) => {
++        if (typeof opts.setGeneralField === 'function') opts.setGeneralField(key, next)
++        else {
++          const current = g[key]
++          if (current && typeof current === 'object' && 'value' in current) current.value = next
++          else g[key] = next
++        }
++      },
++    )
++  }
++  for (const key of generalFields) {
++    Object.defineProperty(scene, key, {
++      enumerable: true,
++      configurable: false,
++      get: () => generalValue(key),
++      set: (value) => {
++        if (typeof opts.setGeneralField === 'function') {
++          opts.setGeneralField(key, vectorFields.has(key) ? normVec(value).join(' ') : value)
++        }
++        else {
++          const g = opts.general
++          if (!g) return
++          const entry = g[key]
++          const next = vectorFields.has(key) ? normVec(value).join(' ') : value
++          if (entry && typeof entry === 'object' && 'value' in entry) entry.value = next
++          else g[key] = next
++        }
++      },
++    })
+   }
++  return scene
+ }
+ 
+ /**
+@@ -2179,6 +2329,30 @@ export function makeSharedCamera(getLive) {
+   return cam
+ }
+ 
++function rotateEulerInObjectSpace(current, delta) {
++  const q = (angles) => {
++    const [x, y, z] = angles.map((v) => Number(v) || 0)
++    const sx = Math.sin(x / 2), cx = Math.cos(x / 2)
++    const sy = Math.sin(y / 2), cy = Math.cos(y / 2)
++    const sz = Math.sin(z / 2), cz = Math.cos(z / 2)
++    // Rz * Ry * Rx, matching the renderer's scene transform convention.
++    return [sx * cy * cz - cx * sy * sz, cx * sy * cz + sx * cy * sz,
++      cx * cy * sz - sx * sy * cz, cx * cy * cz + sx * sy * sz]
++  }
++  const a = q(current), b = q(delta)
++  const [x1, y1, z1, w1] = a, [x2, y2, z2, w2] = b
++  const x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
++  const y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
++  const z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
++  const w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
++  const sinY = Math.max(-1, Math.min(1, 2 * (w * y - z * x)))
++  return [
++    Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)),
++    Math.asin(sinY),
++    Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)),
++  ]
++}
++
+ function makeObjectLayerProxy(layer, opts) {
+   // 骨骼覆写表：宿主按图层持有一份（与 computeSkinMatrices 第 4 参同一引用）。
+   // getBoneOverrides 是函数，因为 thisScene.getLayer(name) 拿到的是**别的**图层，
+@@ -2247,6 +2421,31 @@ function makeObjectLayerProxy(layer, opts) {
+     // createLayer({perspective:true}) 的阴影克隆层则经 createSceneLayer 展开早已带旗标。
+     get perspective() { return !!(layer && layer.perspective) },
+     set perspective(v) { if (layer) layer.perspective = !!v },
++    get solid() { return !!(layer && layer.solid) },
++    set solid(v) { if (layer) layer.solid = !!v },
++    get rootmotion() { return layer ? layer.rootmotion !== false : true },
++    set rootmotion(v) { if (layer) layer.rootmotion = !!v },
++    get parallaxDepth() {
++      return makeLiveVec2(
++        () => layer?.parallaxDepth || [0, 0],
++        (value) => {
++          if (!layer) return
++          const depth = [Number(value.x) || 0, Number(value.y) || 0]
++          layer.parallaxDepth = depth
++          layer.parallaxDepthOwn = depth.slice()
++          layer.parallaxDepthProp = depth.slice()
++        },
++      )
++    },
++    set parallaxDepth(value) {
++      if (!layer) return
++      const depth = value && typeof value === 'object'
++        ? [Number(value.x ?? value[0]) || 0, Number(value.y ?? value[1]) || 0]
++        : [0, 0]
++      layer.parallaxDepth = depth
++      layer.parallaxDepthOwn = depth.slice()
++      layer.parallaxDepthProp = depth.slice()
++    },
+     get brightness() { return layer && typeof layer.brightness === 'number' ? layer.brightness : 1 },
+     set brightness(v) { if (layer) layer.brightness = Number(v) || 0 },
+     get text() { return layer && layer.text !== undefined ? String(layer.text) : '' },
+@@ -2255,12 +2454,55 @@ function makeObjectLayerProxy(layer, opts) {
+       if (typeof v === 'boolean') return
+       layer.text = v == null ? '' : String(v)
+     },
++    get backgroundcolor() {
++      return makeLiveVec3(
++        () => layer && layer.isText ? layer.textBackgroundcolor || [0, 0, 0] : [0, 0, 0],
++        (v) => { if (layer && layer.isText) layer.textBackgroundcolor = normVec(v) },
++      )
++    },
++    set backgroundcolor(v) {
++      if (layer && layer.isText) layer.textBackgroundcolor = normVec(v)
++    },
+     get pointsize() { return (layer && layer.textPointsize) || 24 },
+     set pointsize(v) { if (layer) layer.textPointsize = Number(v) || 24 },
+     // 文字脚本 `thisLayer.font = 'fonts/….otf'`：对象代理也要能写回，否则
+     // getLayer('旋转文字1').font 的赋值进空气，21 档字体切不换。
+     get font() { return (layer && layer.textFont) || '' },
+     set font(v) { if (layer) layer.textFont = String(v || '') },
++    get opaquebackground() { return !!(layer && layer.textOpaquebackground) },
++    set opaquebackground(v) { if (layer) layer.textOpaquebackground = !!v },
++    get backgroundbrightness() { return layer && Number.isFinite(Number(layer.textBackgroundbrightness)) ? Number(layer.textBackgroundbrightness) : 1 },
++    set backgroundbrightness(v) { if (layer) layer.textBackgroundbrightness = Number(v) || 0 },
++    get padding() { return layer ? Number(layer.textPadding) || 0 : 0 },
++    set padding(v) { if (layer) layer.textPadding = Math.max(0, Number(v) || 0) },
++    get horizontalalign() { return (layer && layer.textHAlign) || 'center' },
++    set horizontalalign(v) {
++      if (!layer) return
++      layer.textHAlign = normalizeTextAlign(v, 'center')
++      if (layer.textAnchor === 'none' && typeof opts.setTextAnchor === 'function') opts.setTextAnchor(layer, layer.textAnchor)
++    },
++    get verticalalign() { return (layer && layer.textVAlign) || 'center' },
++    set verticalalign(v) {
++      if (!layer) return
++      const value = String(v || 'center').toLowerCase()
++      layer.textVAlign = ['top', 'center', 'bottom'].includes(value) ? value : 'center'
++      if (layer.textAnchor === 'none' && typeof opts.setTextAnchor === 'function') opts.setTextAnchor(layer, layer.textAnchor)
++    },
++    get anchor() { return (layer && layer.textAnchor) || 'center' },
++    set anchor(v) {
++      if (!layer) return
++      const next = normalizeTextAnchor(v)
++      if (typeof opts.setTextAnchor === 'function') opts.setTextAnchor(layer, next)
++      else layer.textAnchor = next
++    },
++    get limitrows() { return !!(layer && layer.textLimitrows) },
++    set limitrows(v) { if (layer) layer.textLimitrows = !!v },
++    get maxrows() { return layer ? Number(layer.textMaxrows) || 0 : 0 },
++    set maxrows(v) { if (layer) layer.textMaxrows = Math.max(0, Number(v) || 0) },
++    get limitwidth() { return !!(layer && layer.textLimitwidth) },
++    set limitwidth(v) { if (layer) layer.textLimitwidth = !!v },
++    get maxwidth() { return layer ? Number(layer.textMaxwidth) || 0 : 0 },
++    set maxwidth(v) { if (layer) layer.textMaxwidth = Math.max(0, Number(v) || 0) },
+     // 音频条模板写 `bar.alignment = 'bottom'|'centre'|'top'`（2652493753）
+     get alignment() { return (layer && layer.alignment) || 'center' },
+     set alignment(v) {
+@@ -2317,6 +2559,58 @@ function makeObjectLayerProxy(layer, opts) {
+       }
+       return out
+     },
++    rotateObjectSpace(value) {
++      if (!layer) return
++      const slot = Array.isArray(layer.localAngles) ? layer.localAngles : layer.angles
++      if (!Array.isArray(slot)) return
++      const next = rotateEulerInObjectSpace(slot, normVec(value))
++      slot[0] = next[0]; slot[1] = next[1]; slot[2] = next[2]
++      if (slot !== layer.angles && (layer.parentId === undefined || layer.parentId === null)) {
++        layer.angles[0] = next[0]; layer.angles[1] = next[1]; layer.angles[2] = next[2]
++      } else if (slot !== layer.angles && typeof opts.markTransformDirty === 'function') {
++        opts.markTransformDirty(layer)
++      }
++    },
++    setParent(parent, attachmentOrAdjust, adjustTransform) {
++      if (!layer || typeof opts.setSceneLayerParent !== 'function') return false
++      const attachment = typeof attachmentOrAdjust === 'string' || typeof attachmentOrAdjust === 'number'
++        ? attachmentOrAdjust
++        : undefined
++      const adjust = typeof attachmentOrAdjust === 'boolean'
++        ? attachmentOrAdjust
++        : !!adjustTransform
++      return !!opts.setSceneLayerParent(layer, parent, attachment, adjust)
++    },
++    getAttachmentIndex(attachment) {
++      return typeof opts.getLayerAttachmentIndex === 'function'
++        ? opts.getLayerAttachmentIndex(layer, attachment)
++        : -1
++    },
++    getAttachmentMatrix(attachment) {
++      const value = typeof opts.getLayerAttachmentMatrix === 'function'
++        ? opts.getLayerAttachmentMatrix(layer, attachment)
++        : null
++      const m = value && value.length === 16 ? Float32Array.from(value) : Float32Array.from([
++        1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
++      ])
++      return { m }
++    },
++    getAttachmentOrigin(attachment) {
++      const m = this.getAttachmentMatrix(attachment).m
++      return new Vec3(m[12], m[13], m[14])
++    },
++    getAttachmentAngles(attachment) {
++      const m = this.getAttachmentMatrix(attachment).m
++      const sx = Math.hypot(m[0], m[1], m[2]) || 1
++      const sy = Math.hypot(m[4], m[5], m[6]) || 1
++      const sz = Math.hypot(m[8], m[9], m[10]) || 1
++      const r02 = Math.max(-1, Math.min(1, -m[2] / sx))
++      return new Vec3(
++        Math.atan2(m[6] / sy, m[10] / sz),
++        Math.asin(r02),
++        Math.atan2(m[1] / sx, m[0] / sx),
++      )
++    },
+     // [we-scene patch] 关键帧动画：改为返回**真实控制器**。
+     // 此前一律返回 makeNeutralAnimation() —— 纯 no-op，`play()` 什么也不做。
+     // 于是 2938612768 的封面淡入（mediaThumbnailChanged 里 `anim.stop(); anim.play()`）
+@@ -2476,6 +2770,7 @@ function makeObjectLayerProxy(layer, opts) {
+       const name = String(key)
+       return makeEffectHandle(list.find((e) => e && e.name === name) || null, opts)
+     },
++    getEffectCount: () => (layer && Array.isArray(layer.effects) ? layer.effects.length : 0),
+     // [we-scene patch] IMaterial getMaterial(index)（1712475860 Dino Run：
+     // applyUserProperties 按关卡改 godrays pass 的 raythreshold/rayintensity）。
+     // 返回该层第 index 个效果 pass 的可写常量袋：写入落到
+@@ -2554,9 +2849,20 @@ function makeObjectLayerProxy(layer, opts) {
+         // 退回 world；scale 缺省 1、origin 缺省 0。
+         const localSlot = LOCAL_VEC_SLOT[key]
+         const fallback = key === 'scale' ? [1, 1, 1] : [0, 0, 0]
++        if (key === 'color' && layer && layer.isText) {
++          return makeLiveVec3(
++            () => layer.textColor || layer.color || fallback,
++            (v) => {
++              const color = normVec(v)
++              layer.textColor = color
++              layer.color = color.slice()
++            },
++          )
++        }
+         const a = layer && localSlot && Array.isArray(layer[localSlot])
+           ? layer[localSlot]
+           : (layer && Array.isArray(layer[key]) ? layer[key] : null)
++        if (key === 'size') return new Vec2(a ? a[0] : fallback[0], a ? a[1] : fallback[1])
+         return makeVec3(a || fallback)
+       },
+       set(v) {
+@@ -2565,6 +2871,11 @@ function makeObjectLayerProxy(layer, opts) {
+         sv.x = a[0]; sv.y = a[1]; sv.z = a[2]
+         const localSlot = LOCAL_VEC_SLOT[key]
+         if (!layer) return
++        if (key === 'color' && layer.isText) {
++          layer.textColor = a.slice()
++          layer.color = a.slice()
++          return
++        }
+         if (localSlot) {
+           if (Array.isArray(layer[localSlot])) {
+             layer[localSlot][0] = a[0]; layer[localSlot][1] = a[1]; layer[localSlot][2] = a[2]
+@@ -2603,9 +2914,17 @@ function makeObjectLayerProxy(layer, opts) {
+  */
+ export function evalObjectScript(script, scriptprops, opts = {}) {
+   if (typeof script !== 'string' || script.length === 0) return null
++  if (opts.sceneScriptRuntime && typeof opts.sceneScriptRuntime.createSandbox === 'function') {
++    return opts.sceneScriptRuntime.createSandbox('object', script, scriptprops, opts)
++  }
++  if (typeof globalThis.Compartment !== 'function' || typeof globalThis.harden !== 'function') {
++    const error = new Error('SceneScript execution requires the isolated hardened worker runtime.')
++    if (opts.onError) opts.onError(error, 'runtime')
++    return null
++  }
+   const body = scriptToFunctionBody(script)
+ 
+-  const spValues = {}
++  const spValues = Object.create(null)
+   if (scriptprops && typeof scriptprops === 'object') {
+     // [we-scene patch] scriptProperties 的 {user: 属性名, value: 快照} 包装定义成
+     // **活属性**（WE 的 scriptProperties 是活代理，永远读现值）：
+@@ -2636,12 +2955,13 @@ export function evalObjectScript(script, scriptprops, opts = {}) {
+       return undefined
+     },
+   })
++  try { Object.setPrototypeOf(builder, null) } catch { /* capability stays confined to the worker */ }
+ 
+   const engine = {
+     // [we-scene patch] registerAsset 必须把路径**原样返回**：脚本拿到的返回值
+     // 会直接喂给 thisScene.createLayer（1712475860 的金币 coinget）。
+     // 旧 no-op 返回 undefined → createLayer(undefined) 造出无贴图空层，金币永远不显示。
+-    registerAsset: (p) => p,
++    registerAsset: (p) => opts.normalizeAssetPath ? opts.normalizeAssetPath(p) : (typeof p === 'string' ? p : undefined),
+     frametime: 1 / 60,
+     runtime: 0,
+     canvasSize: engineCanvasSize(opts.canvasSize),
+@@ -2676,7 +2996,8 @@ export function evalObjectScript(script, scriptprops, opts = {}) {
+   }
+ 
+   const shared = opts.shared || {}
+-  const sandboxGlobal = { console: makeSandboxConsole() }
++  const sandboxGlobal = Object.create(null)
++  sandboxGlobal.console = makeSandboxConsole()
+   // [we-scene patch] input 由宿主注入共享视图（每帧就地重填），未注入时退化为全 0
+   const input = makeInput(opts.inputView)
+ 
+@@ -2698,46 +3019,12 @@ export function evalObjectScript(script, scriptprops, opts = {}) {
+   })
+ 
+   let fns
++  let rawFns
++  let compiled
+   try {
+-    const factory = new Function(
+-      'scriptProperties', 'engine', 'WEMath', 'WEColor', 'WEVector', 'createScriptProperties', 'shared',
+-      'console', 'process', 'globalThis', 'self', 'window', 'document', 'require', 'module', 'exports',
+-      'fetch', 'XMLHttpRequest', 'Worker', 'importScripts', 'location', 'navigator',
+-      'alert', 'confirm', 'prompt', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+-      'requestAnimationFrame', 'cancelAnimationFrame', 'performance', 'Function',
+-      'Vec3', 'Vec2', 'Vec4', 'input', 'thisLayer', 'thisScene', 'thisObject', 'localStorage',
+-      'MediaPlaybackEvent',
+-      // [we-scene patch] 别名注入：2955378002 的脚本把 localStorage 写成小写
+-      // `localstorage`（作者笔误），WE 侧可运行而这里会 ReferenceError 熔断该入口。
+-      '"use strict";\nvar localstorage = localStorage;\n' + body +
+-      '\n;return {' +
+-      'update: typeof update === "function" ? update : null,' +
+-      'init: typeof init === "function" ? init : null,' +
+-      'applyUserProperties: typeof applyUserProperties === "function" ? applyUserProperties : null,' +
+-      // [we-scene patch] 6 个指针回调（同 evalTextScript，见那里的说明）。
+-      // 字段脚本里 cursor* 同样常见：3299228616 的 visible.script 用 cursorMove
+-      // 拖拽猫、2998757800 的 visible.script 用 cursorDown 抓骨骼 —— 都挂在
+-      // `visible` 字段上，靠回调做互动而不是靠 update 返回值。
+-      'cursorClick: typeof cursorClick === "function" ? cursorClick : null,' +
+-      'cursorEnter: typeof cursorEnter === "function" ? cursorEnter : null,' +
+-      'cursorLeave: typeof cursorLeave === "function" ? cursorLeave : null,' +
+-      'cursorDown: typeof cursorDown === "function" ? cursorDown : null,' +
+-      'cursorUp: typeof cursorUp === "function" ? cursorUp : null,' +
+-      'cursorMove: typeof cursorMove === "function" ? cursorMove : null,' +
+-      // [we-scene patch] 媒体回调此前**一个都没收集**（evalTextScript 至少收了
+-      // mediaPropertiesChanged，这里是零）。全库 308 处声明里 264 处挂在对象字段与
+-      // 效果常量上，全部落在这个函数 —— 不收集就等于媒体集成整体不存在。
+-      MEDIA_CALLBACKS.map((n) => `${n}: typeof ${n} === "function" ? ${n} : null,`).join('') +
+-      // [we-scene patch] 官方 AnimationEvent：播放头越过某帧时同层脚本的
+-      // animationEvent(event, value) 回调（24 处帧事件全在 3163060610，
+-      // 骨骼事件另 4 张；IAnimation 上没有任何注册 API，这是唯一消费口）。
+-      'animationEvent: typeof animationEvent === "function" ? animationEvent : null,' +
+-      // [we-scene patch] resizeScreen(size: Vec2)：画布尺寸变化（含首帧）回调，
+-      // 3396722575 / 3405117965 的自适应缩放模板唯一的钩子。
+-      'resizeScreen: typeof resizeScreen === "function" ? resizeScreen : null,' +
+-      'dummy_: 0' +
+-      '};',
+-    )
++    const objectParams = ['scriptProperties', 'engine', 'WEMath', 'WEColor', 'WEVector', 'createScriptProperties', 'shared', 'console', 'process', 'globalThis', 'self', 'window', 'document', 'require', 'module', 'exports', 'fetch', 'XMLHttpRequest', 'Worker', 'importScripts', 'location', 'navigator', 'alert', 'confirm', 'prompt', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance', 'Function', 'Vec3', 'Vec2', 'Vec4', 'input', 'thisLayer', 'thisScene', 'thisObject', 'localStorage', 'MediaPlaybackEvent']
++    compiled = compileSandboxFactory(body, objectParams)
++    const factory = compiled.factory
+     fns = factory(
+       spValues, wrapEngine(engine), WEMATH, WECOLOR, WEVECTOR, builder, shared,
+       sandboxGlobal.console, undefined, sandboxGlobal, sandboxGlobal, sandboxGlobal,
+@@ -2754,10 +3041,19 @@ export function evalObjectScript(script, scriptprops, opts = {}) {
+       opts.storage || makeSandboxStorage(),
+       MEDIA_PLAYBACK_EVENT,
+     )
++    rawFns = fns
+   } catch (e) {
+     if (opts.onError) opts.onError(e, 'parse')
+     return null
+   }
++  const invokeScript = (name, args) => {
++    if (!rawFns || typeof rawFns._invoke !== 'function') return undefined
++    const result = JSON.parse(rawFns._invoke(name, JSON.stringify(args || [])))
++    return result && result.defined ? result.value : undefined
++  }
++  const rawHooks = rawFns
++  fns = Object.create(null)
++  for (const name of [...SCRIPT_HOOK_NAMES]) fns[name] = rawHooks?.[name] ? (...args) => invokeScript(name, args) : null
+   // [we-scene patch] 放宽「必须有 update」：纯指针交互脚本没有 update，
+   // 只导出 cursorMove / cursorDown 等（3299228616 的拖拽猫、2998757800 的骨骼拖拽
+   // 都是这种形态，挂在 visible 字段上）。改动前这类脚本在这里被整个丢弃，
+@@ -2794,9 +3090,15 @@ export function evalObjectScript(script, scriptprops, opts = {}) {
+   // 只导出 init，里面 `shared.offsetedStartAni(...)` 装启动副作用）。WE 装载时
+   // init 必执行，闸门丢弃则初始进度/回调全部丢失。
+   const hasInitHook = !!(fns && typeof fns.init === 'function')
+-  if (!fns || (!fns.update && !hasCursorHook && !hasMediaHook && !hasApplyHook && !usesEngineClock && !hasAnimEventHook && !hasResizeHook && !hasInitHook)) return null
++  const hasDestroyHook = !!(fns && typeof fns.destroy === 'function')
++  const hasGeneralSettingsHook = !!(fns && typeof fns.applyGeneralSettings === 'function')
++  if (!fns || (!fns.update && !hasCursorHook && !hasMediaHook && !hasApplyHook && !usesEngineClock && !hasAnimEventHook && !hasResizeHook && !hasInitHook && !hasDestroyHook && !hasGeneralSettingsHook)) return null
+ 
+   const sandbox = {
++    _sceneScriptInvoke: (name, serialized) => rawFns._invoke(name, serialized),
++    _sceneScriptInvokeCallback: (callback) => rawFns._invokeCallback(callback),
++    _sceneScriptReadShared: () => rawFns._readShared(),
++    _sceneScriptUpdateShared: (serialized) => rawFns._updateShared(serialized),
+     engine,
+     scriptProperties: spValues,
+     // [we-scene patch] 供宿主区分「字段求值脚本」与「纯指针交互脚本」：
+@@ -2805,8 +3107,11 @@ export function evalObjectScript(script, scriptprops, opts = {}) {
+     hasUpdate: !!fns.update,
+     hasCursorHook,
+     hasApplyHook,
++    hasDestroyHook,
++    hasGeneralSettingsHook,
+     errCount: 0,
+     disabled: false,
++    destroyCalled: false,
+     // [we-scene patch] 错误预算按**入口独立**：update 每帧抛错（WE 非严格模式
+     // 下是静默 no-op 的写法，如对 boolean 原始值赋属性）不该把 cursor*/媒体/
+     // 动画/resize 回调一起熔断 —— 3444812600 的「双击时间可自由拖动」脚本正是
+@@ -2824,6 +3129,16 @@ export function evalObjectScript(script, scriptprops, opts = {}) {
+       if (!fns.applyUserProperties) return
+       try { fns.applyUserProperties(props || {}) } catch (e) { sandbox.errCount++; if (opts.onError) opts.onError(e, 'applyUserProperties') }
+     },
++    applyGeneralSettings(settings) {
++      if (!fns.applyGeneralSettings) return
++      try { fns.applyGeneralSettings(settings || {}) } catch (e) { noteEntryErr('generalSettings', e) }
++    },
++    destroy() {
++      if (sandbox.destroyCalled) return
++      sandbox.destroyCalled = true
++      if (!fns.destroy) return
++      try { fns.destroy() } catch (e) { sandbox.errCount++; if (opts.onError) opts.onError(e, 'destroy') }
++    },
+     /** 求值：value 为字段当前值（可变对象/数字），返回脚本的原始返回值（可能 undefined） */
+     callUpdate(value) {
+       if (sandbox.entryDisabled.update) return undefined
+@@ -2976,11 +3291,80 @@ function makeVec3(v) {
+ }
+ function normVec(o) {
+   if (Array.isArray(o)) return [o[0] || 0, o[1] || 0, o[2] || 0]
++  if (typeof o === 'string') {
++    const parts = o.trim().split(/[\s,]+/).filter(Boolean).slice(0, 3).map((part) => Number(part) || 0)
++    if (parts.length) return [parts[0] || 0, parts[1] || 0, parts[2] || 0]
++  }
+   if (o && typeof o === 'object') return [o.x || 0, o.y || 0, o.z || 0]
+   const n = Number(o) || 0
+   return [n, n, n]
+ }
+ 
++// SceneScript Vec3-valued properties are mutable objects. Return a genuine Vec3
++// instance while writing component assignments back to the owning scene/layer.
++// Arithmetic methods remain value-based, so `thisScene.clearcolor.add(x)` does
++// not mutate until the caller assigns the returned vector, matching Vec3 semantics.
++function makeLiveVec3(read, write) {
++  const vector = new Vec3(...normVec(read()))
++  return new Proxy(vector, {
++    get(target, key, receiver) {
++      if (key === 'x' || key === 'y' || key === 'z') {
++        const current = normVec(read())
++        return current[key === 'x' ? 0 : key === 'y' ? 1 : 2]
++      }
++      return Reflect.get(target, key, receiver)
++    },
++    set(target, key, value, receiver) {
++      if (key === 'x' || key === 'y' || key === 'z') {
++        const current = normVec(read())
++        const index = key === 'x' ? 0 : key === 'y' ? 1 : 2
++        current[index] = Number(value) || 0
++        write(current)
++        return true
++      }
++      return Reflect.set(target, key, value, receiver)
++    },
++  })
++}
++
++function makeLiveVec2(read, write) {
++  const current = () => {
++    const value = read()
++    if (Array.isArray(value)) return [Number(value[0]) || 0, Number(value[1]) || 0]
++    if (value && typeof value === 'object') return [Number(value.x ?? value.width) || 0, Number(value.y ?? value.height) || 0]
++    return [0, 0]
++  }
++  const value = current()
++  return new Proxy(new Vec2(value[0], value[1]), {
++    get(target, key, receiver) {
++      if (key === 'x' || key === 'y') return current()[key === 'x' ? 0 : 1]
++      return Reflect.get(target, key, receiver)
++    },
++    set(target, key, next, receiver) {
++      if (key === 'x' || key === 'y') {
++        const now = current()
++        now[key === 'x' ? 0 : 1] = Number(next) || 0
++        write(now)
++        return true
++      }
++      if (key === 'z') return true
++      return Reflect.set(target, key, next, receiver)
++    },
++  })
++}
++
++function normalizeTextAlign(value, fallback) {
++  const text = String(value || fallback).toLowerCase()
++  return ['left', 'center', 'right', 'top', 'bottom'].includes(text) ? text : fallback
++}
++
++function normalizeTextAnchor(value) {
++  const text = String(value || 'center').toLowerCase()
++  return ['none', 'center', 'top', 'topright', 'right', 'bottomright', 'bottom', 'bottomleft', 'left', 'topleft'].includes(text)
++    ? text
++    : 'center'
++}
++
+ // SceneScript 的 `layer.angles` 是角度（风扇脚本写 `(runtime*speed)%1*360`，
+ // 旋转滑条 min/max 是 ±180/360）。scene.json 快照与 layerModelMatrix 是弧度
+ // （-0.20944 ≈ -12°）。读写两侧必须互转，否则 3396722575 的控制器把 start_angle=-5
+diff --git a/renderer/vendor/we-scene/scene/parse.js b/renderer/vendor/we-scene/scene/parse.js
+index bde1151..a6bfa5f 100644
+--- a/renderer/vendor/we-scene/scene/parse.js
++++ b/renderer/vendor/we-scene/scene/parse.js
+@@ -420,6 +420,9 @@ export function parseScene(sceneJson, project) {
+     return {
+       id: o.id !== undefined ? o.id : i,
+       name: o.name || '',
++      // Keep the authored layer definition separate from normalized runtime state for
++      // IScene.getInitialLayerConfig().
++      initialConfig: o,
+       visible: effVisible[i],
+       // 自身可见性（未沿父链折叠）。热更用户属性时据此重算继承，避免把脚本改过的
+       // 子层 visible 和「父组开关」揉成一份后无法局部刷新。

@@ -1,0 +1,41 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob: data:; connect-src 'self' blob: data:; worker-src blob:; frame-src 'self' blob:">
+<style>html,body,#wallpaper{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}#wallpaper{position:relative}</style></head>
+<body><div id="wallpaper"></div><script src="webwallgl.js"></script><script>
+const send=(event,message='')=>window.webkit?.messageHandlers.luma.postMessage({event,message:String(message).slice(0,3000)});
+const originalFetch=window.fetch.bind(window);window.fetch=async(...args)=>{try{const r=await originalFetch(...args);if(!r.ok)send("diagnostic",String(args[0])+": HTTP "+r.status);return r}catch(e){send("diagnostic",String(args[0])+": "+e.message);throw e}};
+window.lumaMount=async options=>{try{window.wallpaper=await WebWallGL.mount(document.getElementById('wallpaper'),{...options,source:WebWallGL.httpSource('luma://wallpaper/project'),audio:{snapshot:()=>({left:new Float32Array(64),right:new Float32Array(64)})},media:WebWallGL.createMediaSource({hasMedia:false,state:0}),onReady:()=>send('ready'),onError:e=>send('error',e.message),onDiagnostic:(m,l)=>{if(l!=='info')send('diagnostic',m)}});send('ready')}catch(e){send('error',e.message)}};
+window.lumaCapture=async(time,width,height)=>{
+ const controls=WebWallGL.editorOf(window.wallpaper);
+ const blob=await controls.capture({time,width,height,type:'image/png'});
+ return await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(blob)});
+};
+window.lumaEditorAvailable=()=>!!WebWallGL.editorOf(window.wallpaper);
+window.lumaEditorLayers=()=>WebWallGL.editorOf(window.wallpaper)?.getLayers()||[];
+window.lumaEditorLayerProps=id=>WebWallGL.editorOf(window.wallpaper)?.getLayerProps(id)||null;
+window.lumaEditorHitTest=(x,y)=>WebWallGL.editorOf(window.wallpaper)?.hitTestAt(x,y)||[];
+window.lumaEditorTime=()=>WebWallGL.editorOf(window.wallpaper)?.time||0;
+window.lumaEditorSeek=time=>WebWallGL.editorOf(window.wallpaper)?.seek(time);
+window.lumaEditorStep=(amount,fps)=>WebWallGL.editorOf(window.wallpaper)?.step(amount,fps);
+window.lumaEditorSetTimeScale=value=>WebWallGL.editorOf(window.wallpaper)?.setTimeScale(value);
+window.lumaEditorLayerPatch=(id,patch)=>WebWallGL.editorOf(window.wallpaper)?.setLayerProps(id,patch);
+window.lumaEditorLayerOrder=(id,index)=>WebWallGL.editorOf(window.wallpaper)?.reorderLayer(id,index);
+window.lumaEditorCanAdd=spec=>WebWallGL.editorOf(window.wallpaper)?.canHotAddLayer(spec)||{ok:false,reason:'No scene editor is available'};
+window.lumaEditorSetAnimations=(id,layers)=>WebWallGL.editorOf(window.wallpaper)?.setAnimationLayers(id,layers);
+window.lumaEditorScriptIssues=()=>WebWallGL.editorOf(window.wallpaper)?.getScriptIssues()||[];
+window.lumaEditorSkippedScripts=()=>WebWallGL.editorOf(window.wallpaper)?.getSkippedScripts()||0;
+window.lumaDecodeTexture=async base64=>{
+ const bytes=Uint8Array.from(atob(base64),c=>c.charCodeAt(0));
+ const parsed=WebWallGL.parseTex(bytes);
+ if(!(parsed.width>0&&parsed.height>0)||parsed.width*parsed.height>33554432)throw Error('Texture dimensions exceed the fallback image limit');
+ const mip=parsed.isVideo ? {video:parsed.images[0][0].data} : WebWallGL.decodeMips(parsed)[0];
+ if(!mip)throw Error('This texture has no decodable image');
+ if(mip.video)return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(new Blob([mip.video],{type:'video/mp4'}))});
+ const canvas=document.createElement('canvas');canvas.width=mip.width;canvas.height=mip.height;
+ const ctx=canvas.getContext('2d');
+ if(mip.rgba){ctx.putImageData(new ImageData(new Uint8ClampedArray(mip.rgba),mip.width,mip.height),0,0)}
+ else {const bytes=mip.png||mip.image;if(!bytes)throw Error('Unsupported texture encoding');const image=await createImageBitmap(new Blob([bytes]));ctx.drawImage(image,0,0);image.close?.()}
+ return canvas.toDataURL('image/png');
+};
+window.addEventListener('unhandledrejection' ,e=>send('error',e.reason?.message||e.reason));
+</script></body></html>
