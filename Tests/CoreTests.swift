@@ -23,6 +23,13 @@ import AVFoundation
         try check(Safety.workshopID("123456") == "123456", "Steam numeric ID")
         try check(Safety.workshopID("https://evil.example/?id=123456") == nil, "reject non-Steam host")
         try check(Safety.workshopID("123; touch /tmp/no") == nil, "reject command injection")
+        let previousStill = root.appendingPathComponent("previous.png"), nextStill = root.appendingPathComponent("next.png")
+        let stillReceipt = DesktopStillReceipt(screenID: "fixture", originalURL: root.appendingPathComponent("original.png"), installedURL: nextStill, generatedURLs: [previousStill, nextStill])
+        let reloadedStillReceipt = try JSONDecoder().decode(DesktopStillReceipt.self, from: JSONEncoder().encode(stillReceipt))
+        try check(reloadedStillReceipt.ownedURLs.contains(previousStill) && reloadedStillReceipt.ownedURLs.contains(nextStill), "desktop receipt retains both generated stills across interrupted replacement")
+        let legacyStillData = try JSONSerialization.data(withJSONObject: ["screenID": "fixture", "installedURL": nextStill.absoluteString])
+        let legacyStillReceipt = try JSONDecoder().decode(DesktopStillReceipt.self, from: legacyStillData)
+        try check(legacyStillReceipt.ownedURLs == [nextStill], "legacy desktop receipts retain ownership without the new generated-file list")
         var policy = PlaybackPolicy(userPaused: false, holds: ["sleep", "battery"])
         try check(!policy.shouldPlay, "all holds respected"); policy.holds.remove("sleep"); try check(!policy.shouldPlay, "removing one hold keeps others"); policy.userPaused = true; policy.holds.removeAll(); try check(!policy.shouldPlay, "manual pause survives wake"); policy.userPaused = false; try check(policy.shouldPlay, "resume with no holds")
         let original: [String: Any] = ["version":77,"unknown":["preserve":true],"assets":[["id":"apple","categories":["apple-category"]],["id":"third-party","categories":["third"]]],"categories":[["id":"apple-category","extra":123]]]
@@ -54,6 +61,45 @@ import AVFoundation
         try check(library.state.wallpapers[0].duration ?? 0 > 0,"extract duration")
         let restored = LibraryStore(root:library.root)
         try check(restored.state.wallpapers.count == 1,"restore saved library")
+
+        // Removing a wallpaper must preserve its media when the index cannot be saved.
+        let removalLibrary = LibraryStore(root: root.appendingPathComponent("removal-library"))
+        try await removalLibrary.importURL(fixture)
+        let removalItem = removalLibrary.state.wallpapers[0]
+        let removalMedia = try removalLibrary.mediaURL(removalItem)
+        let removalIndex = removalLibrary.root.appendingPathComponent("library.json")
+        try FileManager.default.removeItem(at: removalIndex)
+        try FileManager.default.createDirectory(at: removalIndex, withIntermediateDirectories: false)
+        removalLibrary.remove(removalItem)
+        try check(removalLibrary.state.wallpapers.count == 1 && FileManager.default.fileExists(atPath: removalMedia.path), "failed removal save preserves the library record and media")
+        try FileManager.default.removeItem(at: removalIndex)
+        try check(removalLibrary.save(), "restore the isolated removal test index")
+        var unsafeLibrary = removalLibrary.state
+        unsafeLibrary.wallpapers[0].folder = "../../outside"
+        let unsafeIndex = try JSONEncoder().encode(unsafeLibrary)
+        try unsafeIndex.write(to: removalIndex)
+        let blockedLibrary = LibraryStore(root: removalLibrary.root)
+        try check(blockedLibrary.error != nil && !blockedLibrary.save(), "unsafe saved ownership records block library writes")
+        let preservedUnsafeIndex = try Data(contentsOf: removalIndex)
+        try check(preservedUnsafeIndex == unsafeIndex, "unsafe library index is preserved for recovery")
+        try rejects { try blockedLibrary.resetForClearData() }
+
+        let hiddenLinkProject = root.appendingPathComponent("hidden-link-project")
+        try FileManager.default.createDirectory(at: hiddenLinkProject, withIntermediateDirectories: true)
+        try Data("{\"type\":\"video\",\"file\":\"video.mov\"}".utf8).write(to: hiddenLinkProject.appendingPathComponent("project.json"))
+        try FileManager.default.copyItem(at: fixture, to: hiddenLinkProject.appendingPathComponent("video.mov"))
+        try FileManager.default.createSymbolicLink(at: hiddenLinkProject.appendingPathComponent(".hidden-link"), withDestinationURL: fixture)
+        do { try await library.importURL(hiddenLinkProject); throw LumaError("FAILED: imported a hidden symlink") }
+        catch let error as LumaError { guard error.message.contains("symbolic link") else { throw error }; assertions += 1 }
+
+        let cleanupLibrary = LibraryStore(root: root.appendingPathComponent("cleanup-library"))
+        try await cleanupLibrary.importURL(fixture)
+        let unknownMedia = cleanupLibrary.root.appendingPathComponent("Media/user-file.txt")
+        try Data("keep".utf8).write(to: unknownMedia)
+        let ownedFolder = cleanupLibrary.folder(cleanupLibrary.state.wallpapers[0])
+        try cleanupLibrary.resetForClearData()
+        try check(!FileManager.default.fileExists(atPath: ownedFolder.path) && FileManager.default.fileExists(atPath: unknownMedia.path), "Clear Data removes only recorded media and preserves unknown files")
+        try check(!cleanupLibrary.save() && !FileManager.default.fileExists(atPath: cleanupLibrary.root.appendingPathComponent("library.json").path), "Clear Data prevents shutdown from recreating the library")
 
         // Wallper Videos discovery and import use a temporary home and never touch originals.
         let wallperHome = root.resolvingSymlinksInPath().appendingPathComponent("wallper-home", isDirectory: true)
@@ -199,7 +245,8 @@ import AVFoundation
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: fixture))
         let image = try await generator.image(at: .zero).image
         let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!
-        let sceneFolder = library.root.appendingPathComponent("Media/scene-fallback")
+        let sceneID = UUID()
+        let sceneFolder = library.root.appendingPathComponent("Media/\(sceneID.uuidString)")
         try FileManager.default.createDirectory(at: sceneFolder, withIntermediateDirectories: true)
         try png.write(to: sceneFolder.appendingPathComponent("background.png"))
         try png.write(to: sceneFolder.appendingPathComponent("preview.png"))
@@ -211,7 +258,7 @@ import AVFoundation
         try JSONSerialization.data(withJSONObject: ["assets": [], "categories": [], "preserve": "sentinel"]).write(to: manifest)
         let fallback = NativeLockScreen(library: library, wallpaperRoot: nativeRoot, opensSettings: false)
         fallback.sceneMode = .sourceMedia
-        let sceneWallpaper = Wallpaper(title: "Broken scene with image", kind: .scene, folder: "scene-fallback", entry: "missing.pkg")
+        let sceneWallpaper = Wallpaper(id: sceneID, title: "Broken scene with image", kind: .scene, folder: sceneID.uuidString, entry: "missing.pkg")
         fallback.install(sceneWallpaper, assets: nil)
         let deadline = Date().addingTimeInterval(30)
         while fallback.busy { guard Date() < deadline else { throw LumaError("Fallback integration check timed out") }; try await Task.sleep(for: .milliseconds(100)) }
@@ -221,6 +268,10 @@ import AVFoundation
         try check(MovieMetadata.temporalGroups(in: installed).isSuperset(of: ["tscl", "tsas"]), "still fallback has native temporal metadata")
         let catalog = try JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as! [String: Any]
         try check(catalog["preserve"] as? String == "sentinel", "fallback installer preserves catalog metadata")
+        fallback.removeInstalled()
+        try check(fallback.receipt == nil && !FileManager.default.fileExists(atPath: library.root.appendingPathComponent("native-receipt.json").path), "normal native uninstall removes the persisted receipt")
+        let afterRemoval = NativeLockScreen(library: library, wallpaperRoot: nativeRoot, opensSettings: false)
+        try check(!afterRemoval.hasManagedChanges && !FileManager.default.fileExists(atPath: receipt.videoPath), "native removal stays removed after service restart")
         print("PASS: SteamCMD detection, packed media safety, source-image fallback, and native still installation in a temporary catalog")
         print("ALL PASSED (\(assertions) assertions). No system wallpaper files were changed.")
     }

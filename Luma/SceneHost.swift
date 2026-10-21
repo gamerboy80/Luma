@@ -12,6 +12,7 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
         do {
             guard let url = urlSchemeTask.request.url, url.host == "wallpaper" else { throw LumaError("Unknown wallpaper origin.") }
+            try Safety.validateDirectoryIfPresent(project)
             let path = url.path
             var data: Data
             var mime = "application/octet-stream"
@@ -82,9 +83,11 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
         webView.load(URLRequest(url: URL(string: "luma://wallpaper/app/renderer.html?localAssets=1")!))
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame, let origin = message.frameInfo.request.url, origin.scheme == "luma", origin.path == "/app/renderer.html", let body = message.body as? [String: String] else { return }
+        guard !stopped, message.frameInfo.isMainFrame, let origin = message.frameInfo.request.url, origin.scheme == "luma", origin.host == "wallpaper", origin.path == "/app/renderer.html", let body = message.body as? [String: String] else { return }
         switch body["event"] {
-        case "ready": didBecomeReady = true; setPlaying(desiredPlaying); ready?()
+        case "ready":
+            guard !didBecomeReady else { return }
+            didBecomeReady = true; setPlaying(desiredPlaying); ready?()
         case "error": failed?((body["message"] ?? "The scene renderer stopped.") + (lastResourceWarning.isEmpty ? "" : "\n" + lastResourceWarning))
         case "diagnostic": lastResourceWarning = body["message"] ?? ""; diagnostic?(lastResourceWarning)
         default: break
@@ -112,7 +115,11 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
-        decisionHandler(["luma", "blob", "about", "data"].contains(url.scheme ?? "") ? .allow : .cancel)
+        if navigationAction.targetFrame?.isMainFrame != false {
+            decisionHandler(url.scheme == "luma" && url.host == "wallpaper" && url.path == "/app/renderer.html" ? .allow : .cancel)
+        } else {
+            decisionHandler(["luma", "blob", "about", "data"].contains(url.scheme ?? "") ? .allow : .cancel)
+        }
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed?(error.localizedDescription) }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { failed?("The scene renderer exited. Retry this wallpaper to rebuild its graphics context.") }
@@ -224,7 +231,9 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
         return (data, string.hasPrefix("data:video/"))
     }
     func stop() {
+        guard !stopped else { return }
         stopped = true
+        didBecomeReady = false
         webView.evaluateJavaScript("window.wallpaper?.destroy({releasePkgCache:true})", completionHandler: nil)
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "luma")
         webView.stopLoading(); ready = nil; failed = nil; diagnostic = nil

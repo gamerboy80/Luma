@@ -159,12 +159,6 @@ struct ClearDataPlan {
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
-    private enum InstanceLockResult {
-        case acquired
-        case alreadyRunning
-        case failed(String)
-    }
-
     private static let openLibraryNotification = Notification.Name("dev.patrick.Luma.openLibrary")
     var model: AppModel?
     var openLibraryWindow: (() -> Void)? {
@@ -176,47 +170,47 @@ struct ClearDataPlan {
     }
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var instanceNotificationObserver: NSObjectProtocol?
-    private var instanceLockDescriptor: Int32 = -1
+    private static let instanceLock = InstanceLock()
     private var pendingOpenLibraryRequest = false
-    private var isPrimaryInstance = false
+    private static var isPrimaryInstance = false
 
-    func applicationWillFinishLaunching(_ notification: Notification) {
+    override init() {
+        super.init()
         instanceNotificationObserver = DistributedNotificationCenter.default().addObserver(
-            forName: Self.openLibraryNotification,
-            object: Bundle.main.bundleIdentifier,
-            queue: .main
+            forName: Self.openLibraryNotification, object: Bundle.main.bundleIdentifier, queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.isPrimaryInstance else { return }
+                guard let self, Self.isPrimaryInstance else { return }
                 self.openOrFocusLibraryWindow()
             }
         }
+    }
 
-        if hasOtherLumaProcess {
-            activateExistingInstance()
-            NSApp.terminate(nil)
-            return
-        }
-
-        switch acquireInstanceLock() {
-        case .acquired:
-            isPrimaryInstance = true
-            // Start as a menu-bar app. The Dock icon is added only once a Luma window is visible.
-            NSApp.setActivationPolicy(.accessory)
-        case .alreadyRunning:
-            activateExistingInstance()
-            NSApp.terminate(nil)
-        case .failed(let reason):
-            NSLog("Luma could not establish its single-instance lock: %@", reason)
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                alert.messageText = "Luma could not start safely"
-                alert.informativeText = "Luma could not establish its single-instance lock. Quit the other Luma process or check access to the macOS temporary folder, then try again.\n\n\(reason)"
-                alert.alertStyle = .critical
-                alert.runModal()
-                NSApp.terminate(nil)
+    // Called before AppModel construction: duplicate processes must not load,
+    // rewrite, or restore any library or system wallpaper state.
+    static func claimPrimaryInstanceOrExit() {
+        let bundleID = Bundle.main.bundleIdentifier ?? "dev.patrick.Luma"
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(bundleID).\(getuid()).instance-lock")
+        do {
+            switch try Self.instanceLock.claim(at: url) {
+            case .primary: isPrimaryInstance = true
+            case .alreadyRunning:
+                activateExistingInstance()
+                Darwin.exit(EXIT_SUCCESS)
             }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Luma could not start safely"
+            alert.informativeText = "Could not establish Luma's single-instance lock. Check access to the macOS temporary folder and try again.\n\n\(error.localizedDescription)"
+            alert.alertStyle = .critical
+            alert.runModal()
+            Darwin.exit(EXIT_FAILURE)
         }
+    }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -257,41 +251,7 @@ struct ClearDataPlan {
         return true
     }
 
-    private func acquireInstanceLock() -> InstanceLockResult {
-        let bundleID = Bundle.main.bundleIdentifier ?? "dev.patrick.Luma"
-        let lockURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(bundleID).\(getuid()).instance-lock", isDirectory: false)
-        let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, mode_t(S_IRUSR | S_IWUSR))
-        guard descriptor >= 0 else {
-            return .failed(String(cString: strerror(errno)))
-        }
-
-        var info = stat()
-        guard Darwin.fstat(descriptor, &info) == 0 else {
-            let reason = String(cString: strerror(errno))
-            _ = Darwin.close(descriptor)
-            return .failed(reason)
-        }
-        guard (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == getuid() else {
-            _ = Darwin.close(descriptor)
-            return .failed("The lock path is not a regular file owned by this user.")
-        }
-
-        var lock = flock()
-        lock.l_type = Int16(F_WRLCK)
-        lock.l_whence = Int16(SEEK_SET)
-        guard Darwin.fcntl(descriptor, F_SETLK, &lock) == 0 else {
-            let lockError = errno
-            _ = Darwin.close(descriptor)
-            return lockError == EACCES || lockError == EAGAIN
-                ? .alreadyRunning
-                : .failed(String(cString: strerror(lockError)))
-        }
-        instanceLockDescriptor = descriptor
-        return .acquired
-    }
-
-    private func activateExistingInstance() {
+    private static func activateExistingInstance() {
         let bundleID = Bundle.main.bundleIdentifier
         existingLumaProcess?.activate(options: [.activateAllWindows])
         DistributedNotificationCenter.default().post(
@@ -301,9 +261,7 @@ struct ClearDataPlan {
         )
     }
 
-    private var hasOtherLumaProcess: Bool { existingLumaProcess != nil }
-
-    private var existingLumaProcess: NSRunningApplication? {
+    private static var existingLumaProcess: NSRunningApplication? {
         let bundleID = Bundle.main.bundleIdentifier
         return NSWorkspace.shared.runningApplications.first {
             $0.bundleIdentifier == bundleID && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && !$0.isTerminated
@@ -348,14 +306,20 @@ struct ClearDataPlan {
 
 @main struct LumaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    @StateObject private var model = AppModel()
+    @StateObject private var model: AppModel
+    init() {
+        AppDelegate.claimPrimaryInstanceOrExit()
+        _model = StateObject(wrappedValue: AppModel())
+    }
     var body: some Scene {
+        // Attach shutdown ownership even on a login launch that never opens a window.
+        let _ = attachModelToDelegate()
         WindowGroup("Luma", id: "library") {
             ContentView(model: model).preferredColorScheme(.dark)
         }
         .defaultSize(width: 1180, height: 780)
         .commands {
-            LibraryCommands()
+            LibraryCommands(delegate: delegate)
             CommandGroup(replacing: .newItem) {
                 Button("Import Wallpaper…") { model.library.chooseImport() }.keyboardShortcut("o")
                 Button("Import Project Folder…") { model.library.chooseImport(folders: true) }.keyboardShortcut("o", modifiers: [.command, .shift])
@@ -369,6 +333,7 @@ struct ClearDataPlan {
         Settings { PreferencesView(model: model, library: model.library).frame(width: 650, height: 640).preferredColorScheme(.dark) }
         MenuBarExtra("Luma", systemImage: "waveform.path") { MenuContent(model: model, library: model.library, desktop: model.desktop) }
     }
+    private func attachModelToDelegate() { delegate.model = model }
 }
 struct MenuContent: View {
     let model: AppModel
@@ -395,11 +360,16 @@ struct MenuContent: View {
 }
 
 struct LibraryCommands: Commands {
+    let delegate: AppDelegate
     @Environment(\.openWindow) private var openWindow
     var body: some Commands {
+        let _ = registerOpenAction()
         CommandGroup(after: .appInfo) {
             Button("Open Library") { LumaWindowPresenter.openLibrary(openWindow) }.keyboardShortcut("1", modifiers: .command)
         }
+    }
+    private func registerOpenAction() {
+        delegate.openLibraryWindow = { LumaWindowPresenter.openLibrary(openWindow) }
     }
 }
 

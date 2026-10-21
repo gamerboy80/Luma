@@ -92,10 +92,17 @@ Static inspection of the local Wallper 1.12.1 app confirms its CDN roots and bac
 ./Scripts/test.sh
 ./Scripts/test-scenes.sh
 ./Scripts/test-editor.sh
+./Scripts/test-instance.sh
 ```
 
 Focused checks use generated temporary media and do not modify the system wallpaper catalog. They cover path traversal/symlinks, Workshop IDs, overlapping pause holds, native catalog/selection preservation, import rollback, persistence, original-source preservation, and real HEVC temporal encoding. The scene integration check creates a PKGV0012 package, loads it in WebKit, checks rendered pixels, and exports a playable scene movie. Native lock/unlock, multiple physical displays, Steam account downloads, and arbitrary Workshop scene fidelity require testing in the user's environment.
 
 The renderer is pinned and its licenses/source links are recorded in [Vendor/DEPENDENCIES.md](Vendor/DEPENDENCIES.md). Swift source is under `Luma/`.
 
-Verified locally: Release build succeeded; 56 focused assertions passed; the packed-scene/WebGL-capture/movie-export, image/video texture extraction, and captured-still checks passed; procedural preview, scene preview, and desktop application were exercised in the running app. The unsandboxed app also launched the selected SteamCMD executable successfully with `+quit`, without logging in; library and folder connections survived the build profile change. Actual account login and Workshop downloads require user credentials and remain unverified. No native system wallpaper catalog was changed during these checks.
+The core regressions include corrupt library ownership records, deletion when persistence fails, Clear Data ownership, native collection removal across restart, and desktop-still replacement receipts. Editor regressions cover failed index writes, corrupt index preservation, changes made outside the editor, self-export rejection, invalid layer IDs, and history. The instance test races six child processes against the same temporary lock and checks that it is released after exit. The scene suite also exercises reviewed scripts, stale and disabled approvals, init-only scripts, syntax rejection, constructor capability checks, and infinite loops during source evaluation, init, and updates. These fixtures use temporary directories and do not modify the real system wallpaper catalog.
+
+## Continuous integration
+
+[Build and test](.github/workflows/ci.yml) runs on pushes to `main`, pull requests, and manual dispatch. It builds the standard and sandboxed Release profiles on macOS 26, verifies and packages each locally signed app, uploads the ZIP and build logs, and runs the core, editor, instance, and WebKit scene suites in separate jobs. Source checks validate shell and workflow syntax. Action revisions are pinned to commits; [Dependabot](.github/dependabot.yml) proposes monthly GitHub Actions updates.
+
+Artifacts are local development builds, without Developer ID signing or notarization. The HEVC and WebGL integration suites require the runner's media and graphics services; failures are reported in their uploaded logs. Lock/unlock, actual login-item registration, multiple physical displays, authenticated Steam downloads, and the private wallpaper APIs still require checks on a real Mac. The source review and fixes from October 20, 2026 are recorded in [REVIEW_2026-10-20.md](research/REVIEW_2026-10-20.md).

@@ -22,17 +22,22 @@ import UniformTypeIdentifiers
     init(root: URL? = nil) {
         self.root = root ?? Self.preferredRoot(defaultRoot: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Luma", isDirectory: true), home: FileManager.default.homeDirectoryForCurrentUser)
         do {
+            try Safety.validateDirectoryIfPresent(self.root)
             try FileManager.default.createDirectory(at: self.root, withIntermediateDirectories: true)
-            let stateURL = self.root.appendingPathComponent("library.json")
+            let stateURL = try Safety.child("library.json", under: self.root)
             if FileManager.default.fileExists(atPath: stateURL.path) {
-                do { state = try JSONDecoder().decode(SavedLibrary.self, from: Data(contentsOf: stateURL)) }
+                do {
+                    let loaded = try JSONDecoder().decode(SavedLibrary.self, from: Data(contentsOf: stateURL))
+                    try validateLibrary(loaded)
+                    state = loaded
+                }
                 catch { canSave = false; self.error = "The library could not be read. The original file is preserved; use Reveal Library to recover it. \(error.localizedDescription)"; return }
             }
             for index in state.wallpapers.indices where state.wallpapers[index].kind == .scene && !state.wallpapers[index].scriptsApproved {
                 state.wallpapers[index].trustedScripts = false
             }
             try installBuiltIns()
-        } catch { self.error = error.localizedDescription }
+        } catch { canSave = false; self.error = error.localizedDescription }
     }
     static func preferredRoot(defaultRoot: URL, home: URL) -> URL {
         // Continue using this app's existing data when switching from its sandboxed
@@ -42,11 +47,26 @@ import UniformTypeIdentifiers
         if previous.path != defaultRoot.path, FileManager.default.fileExists(atPath: previous.appendingPathComponent("library.json").path) { return previous }
         return defaultRoot
     }
-    func folder(_ wallpaper: Wallpaper) -> URL { root.appendingPathComponent("Media", isDirectory: true).appendingPathComponent(wallpaper.folder, isDirectory: true) }
-    func mediaURL(_ wallpaper: Wallpaper) throws -> URL { try Safety.child(wallpaper.entry, under: folder(wallpaper)) }
+    func folder(_ wallpaper: Wallpaper) -> URL { root.appendingPathComponent("Media", isDirectory: true).appendingPathComponent(wallpaper.id.uuidString, isDirectory: true) }
+    func mediaURL(_ wallpaper: Wallpaper) throws -> URL {
+        guard wallpaper.folder == wallpaper.id.uuidString else { throw LumaError("This wallpaper has an invalid managed folder record.") }
+        let directory = try Safety.child("Media/\(wallpaper.id.uuidString)", under: root)
+        return try Safety.child(wallpaper.entry, under: directory)
+    }
+    private func validateLibrary(_ value: SavedLibrary) throws {
+        guard value.version == 1, Set(value.wallpapers.map(\.id)).count == value.wallpapers.count else { throw LumaError("The library version or wallpaper IDs are invalid.") }
+        for wallpaper in value.wallpapers {
+            _ = try mediaURL(wallpaper)
+            if let preview = wallpaper.preview { _ = try Safety.child(preview, under: folder(wallpaper)) }
+        }
+    }
     @discardableResult func save(notify: Bool = true) -> Bool {
         guard canSave else { error = "The existing library is unreadable and was preserved. Recover or rename library.json before making changes."; return false }
-        do { try JSONEncoder().encode(state).write(to: root.appendingPathComponent("library.json"), options: .atomic) }
+        do {
+            try Safety.validateDirectoryIfPresent(root)
+            try validateLibrary(state)
+            try JSONEncoder().encode(state).write(to: Safety.child("library.json", under: root), options: .atomic)
+        }
         catch { self.error = "Could not save the library: \(error.localizedDescription)"; return false }
         if notify { onChange?() }
         return true
@@ -56,11 +76,26 @@ import UniformTypeIdentifiers
         update(&state.wallpapers[i]); save()
     }
     func remove(_ wallpaper: Wallpaper) {
-        guard !wallpaper.isBuiltIn else { return }
+        guard canSave, let stored = state.wallpapers.first(where: { $0.id == wallpaper.id }), !stored.isBuiltIn else { return }
+        let managedFolder: URL
+        do {
+            guard stored.folder == stored.id.uuidString else { throw LumaError("The wallpaper's managed folder record is invalid. No files were removed.") }
+            managedFolder = try Safety.child("Media/\(stored.id.uuidString)", under: root)
+            try Safety.validateDirectoryIfPresent(managedFolder)
+        } catch { self.error = error.localizedDescription; return }
+        let previous = state
         state.displays = state.displays.mapValues { var c = $0; if c.wallpaperID == wallpaper.id { c.wallpaperID = nil }; return c }
         state.preferences.playlistIDs.removeAll { $0 == wallpaper.id }
-        state.wallpapers.removeAll { $0.id == wallpaper.id }; save()
-        do { try FileManager.default.removeItem(at: folder(wallpaper)) } catch { self.error = error.localizedDescription }
+        state.wallpapers.removeAll { $0.id == wallpaper.id }
+        guard save() else { state = previous; return }
+        do {
+            if FileManager.default.fileExists(atPath: managedFolder.path) { try FileManager.default.removeItem(at: managedFolder) }
+        } catch {
+            state = previous
+            let removalError = error.localizedDescription
+            _ = save()
+            self.error = "Could not remove the wallpaper; its library record was retained: \(removalError)"
+        }
     }
     func chooseImport(folders: Bool = false) {
         let panel = NSOpenPanel(); panel.canChooseDirectories = folders; panel.canChooseFiles = !folders; panel.allowsMultipleSelection = true
@@ -82,6 +117,8 @@ import UniformTypeIdentifiers
     func importURL(_ source: URL, workshopID: String? = nil, sourceDigest: String? = nil, titleOverride: String? = nil, safeSingleFileRoot: URL? = nil) async throws {
         guard canSave else { throw LumaError("Recover the unreadable library before importing more wallpapers.") }
         let fm = FileManager.default
+        let sourceValues = try source.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
+        guard sourceValues.isSymbolicLink != true, sourceValues.isDirectory == true || sourceValues.isRegularFile == true else { throw LumaError("Choose a regular media file or real project folder, not a symbolic link or special file.") }
         var directory: ObjCBool = false
         guard fm.fileExists(atPath: source.path, isDirectory: &directory) else { throw LumaError("The selected file no longer exists.") }
         if directory.boolValue && !fm.fileExists(atPath: source.appendingPathComponent("project.json").path) {
@@ -106,6 +143,7 @@ import UniformTypeIdentifiers
         else { throw LumaError("Choose a video, image, HTML page, scene.pkg, or project.json.") }
         let entry = object["file"] as? String ?? (isProject ? (kind == .scene ? "scene.pkg" : "index.html") : source.lastPathComponent)
         let id = UUID(); let destination = root.appendingPathComponent("Media/\(id.uuidString)", isDirectory: true)
+        _ = try Safety.child("Media/\(id.uuidString)", under: root)
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         var importedDigest = sourceDigest
         do {
@@ -136,7 +174,8 @@ import UniformTypeIdentifiers
                 let asset = AVURLAsset(url: try Safety.child(wallpaper.entry, under: destination))
                 guard try await asset.load(.isPlayable), let track = try await asset.loadTracks(withMediaType: .video).first else { throw LumaError("macOS cannot decode this video. Convert it to H.264 or HEVC MP4/MOV first.") }
                 let size = try await track.load(.naturalSize); wallpaper.width = Int(size.width); wallpaper.height = Int(size.height)
-                wallpaper.duration = try await asset.load(.duration).seconds
+                let duration = try await asset.load(.duration).seconds
+                wallpaper.duration = duration.isFinite && duration >= 0 ? duration : nil
                 let generator = AVAssetImageGenerator(asset: asset); generator.appliesPreferredTrackTransform = true; generator.maximumSize = CGSize(width: 900, height: 600)
                 if let image = try? await generator.image(at: .zero).image { let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]); try data?.write(to: destination.appendingPathComponent("luma-preview.png")); wallpaper.preview = "luma-preview.png" }
             } else if kind == .image { wallpaper.preview = wallpaper.entry }
@@ -148,6 +187,7 @@ import UniformTypeIdentifiers
         } catch { try? fm.removeItem(at: destination); throw error }
     }
     func resetForClearData() throws {
+        guard canSave else { throw LumaError("Recover the unreadable library before clearing its data so Luma can identify its owned files safely.") }
         let fm = FileManager.default
         let rootValues = try root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard rootValues.isDirectory == true, rootValues.isSymbolicLink != true else {
@@ -213,8 +253,7 @@ import UniformTypeIdentifiers
         try removeDirectoryIfEmpty(cacheRoot, fileManager: fm)
     }
     private func validateTree(_ root: URL) throws {
-        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey], options: [.skipsHiddenFiles]) else { throw LumaError("Cannot read this folder.") }
-        for case let url as URL in enumerator { if try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true { throw LumaError("The project contains a symbolic link. Copy its target into the project first.") } }
+        try Safety.validateProjectTree(root)
     }
     func download(_ string: String) {
         guard downloadTask == nil else { return }
@@ -229,8 +268,7 @@ import UniformTypeIdentifiers
                 let (file, response) = try await URLSession.shared.download(from: url, delegate: delegate)
                 guard let response = response as? HTTPURLResponse, (200...299).contains(response.statusCode) else { throw LumaError("The server refused the download.") }
                 try Task.checkCancellation(); try FileManager.default.moveItem(at: file, to: temporary)
-                try await importURL(temporary)
-                if let first = state.wallpapers.first { edit(first.id) { $0.title = url.deletingPathExtension().lastPathComponent } }
+                try await importURL(temporary, titleOverride: url.deletingPathExtension().lastPathComponent)
             } catch is CancellationError {} catch { self.error = error.localizedDescription }
         }
     }
@@ -238,9 +276,9 @@ import UniformTypeIdentifiers
     private func installBuiltIns() throws {
         for (name, hue) in [("Aurora Drift", 165), ("Midnight Current", 245), ("Ember Field", 22)] {
             guard !state.wallpapers.contains(where: { $0.isBuiltIn && $0.title == name }) else { continue }
-            let id = UUID(); let dir = root.appendingPathComponent("Media/\(id.uuidString)")
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             guard let template = Bundle.main.url(forResource: "ambient", withExtension: "html") else { continue }
+            let id = UUID(); let dir = try Safety.child("Media/\(id.uuidString)", under: root)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let html = try String(contentsOf: template, encoding: .utf8).replacingOccurrences(of: "LUMA_HUE", with: String(hue))
             try html.write(to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
             try Data(Safety.json(["title": name,"type":"web","file":"index.html"]).utf8).write(to: dir.appendingPathComponent("project.json"))

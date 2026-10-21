@@ -61,10 +61,12 @@ extension NSScreen {
     func stop() { observations.removeAll(); scene?.stop(); scene = nil; looper?.disableLooping(); looper = nil; player?.pause(); player?.removeAllItems(); videoLayer?.player = nil; window.orderOut(nil); window.close() }
 }
 
-private struct DesktopStillReceipt: Codable {
+struct DesktopStillReceipt: Codable {
     var screenID: String
     var originalURL: URL?
     var installedURL: URL
+    var generatedURLs: [URL]?
+    var ownedURLs: Set<URL> { Set((generatedURLs ?? []) + [installedURL]) }
 }
 
 @MainActor final class DesktopEngine: ObservableObject {
@@ -295,7 +297,9 @@ private struct DesktopStillReceipt: Codable {
     }
     private func synchronizeStill(_ surface: DesktopSurface, screen: NSScreen) {
         let id = screen.persistentID; stillTasks[id]?.cancel()
-        let originalURL = stillReceipts[id]?.originalURL ?? NSWorkspace.shared.desktopImageURL(for: screen)
+        let priorReceipt = stillReceipts[id]
+        let currentURL = NSWorkspace.shared.desktopImageURL(for: screen)
+        let originalURL = currentURL.map { priorReceipt?.ownedURLs.contains($0) == true } == true ? priorReceipt?.originalURL : currentURL
         stillTasks[id] = Task { [weak self, weak surface] in
             guard let self, let surface else { return }
             do {
@@ -306,11 +310,26 @@ private struct DesktopStillReceipt: Codable {
                 } else if surface.wallpaper.kind == .image { data = try Data(contentsOf: library.mediaURL(surface.wallpaper)) }
                 else { guard let scene = surface.scene else { return }; data = try await scene.capture(time: 0, width: 1920, height: 1080) }
                 try Task.checkCancellation(); guard surfaces[id] === surface else { return }
-                let dir = library.root.appendingPathComponent("DesktopStills"); try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                let url = dir.appendingPathComponent("\(surface.wallpaper.id).png"); try data.write(to: url, options: .atomic)
-                stillReceipts[id] = DesktopStillReceipt(screenID: id, originalURL: originalURL, installedURL: url)
-                try persistStillReceipts()
+                let dir = try Safety.child("DesktopStills", under: library.root)
+                try Safety.validateDirectoryIfPresent(dir)
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let url = dir.appendingPathComponent("\(UUID().uuidString).png"); try data.write(to: url, options: .atomic)
+                stillReceipts[id] = DesktopStillReceipt(screenID: id, originalURL: originalURL, installedURL: url,
+                                                       generatedURLs: Array(priorReceipt?.ownedURLs ?? []) + [url])
+                do { try persistStillReceipts() }
+                catch {
+                    stillReceipts[id] = priorReceipt
+                    try removeOwnedStillFile(url, directory: dir)
+                    throw error
+                }
                 try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:])
+                for previous in priorReceipt?.ownedURLs ?? [] {
+                    if !stillReceipts.contains(where: { $0.key != id && $0.value.ownedURLs.contains(previous) }) {
+                        try removeOwnedStillFile(previous, directory: dir)
+                    }
+                }
+                stillReceipts[id]?.generatedURLs = [url]
+                try persistStillReceipts()
             } catch is CancellationError {} catch { log("Desktop still: \(error.localizedDescription)") }
         }
     }
@@ -318,12 +337,18 @@ private struct DesktopStillReceipt: Codable {
         stillTasks.removeValue(forKey: id)?.cancel()
         guard let receipt = stillReceipts[id] else { return }
         do {
-            if NSWorkspace.shared.desktopImageURL(for: screen) == receipt.installedURL {
+            if let current = NSWorkspace.shared.desktopImageURL(for: screen), receipt.ownedURLs.contains(current) {
                 guard let original = receipt.originalURL else { throw LumaError("The previous desktop image could not be identified, so the wallpaper backup was retained.") }
                 try NSWorkspace.shared.setDesktopImageURL(original, for: screen, options: [:])
             }
+            let directory = try Safety.child("DesktopStills", under: library.root)
+            try Safety.validateDirectoryIfPresent(directory)
+            for url in receipt.ownedURLs where !stillReceipts.contains(where: { $0.key != id && $0.value.ownedURLs.contains(url) }) {
+                try removeOwnedStillFile(url, directory: directory)
+            }
             stillReceipts.removeValue(forKey: id)
-            try persistStillReceipts()
+            do { try persistStillReceipts() }
+            catch { stillReceipts[id] = receipt; throw error }
         } catch { log("Could not restore the previous desktop image: \(error.localizedDescription)") }
     }
     func clearDataRestorePlan() -> [String] {
@@ -365,12 +390,15 @@ private struct DesktopStillReceipt: Codable {
             guard let screen = screens.first(where: { $0.persistentID == id }) else {
                 throw LumaError("Connect display \(id) so Luma can restore its previous desktop image before clearing data.")
             }
-            if NSWorkspace.shared.desktopImageURL(for: screen) == receipt.installedURL {
+            if let current = NSWorkspace.shared.desktopImageURL(for: screen), receipt.ownedURLs.contains(current) {
                 guard let original = receipt.originalURL else { throw LumaError("The previous desktop image could not be identified. Luma's backup was retained.") }
                 try NSWorkspace.shared.setDesktopImageURL(original, for: screen, options: [:])
             }
-            try removeOwnedStillFile(receipt.installedURL, directory: stillsDirectory)
-            stillReceipts.removeValue(forKey: id)
+        }
+        // Restore every display before deleting files: older receipts may share
+        // one generated image across more than one monitor.
+        for url in Set(stillReceipts.values.flatMap { $0.ownedURLs }) {
+            try removeOwnedStillFile(url, directory: stillsDirectory)
         }
         let ownership = stillsDirectory.appendingPathComponent("ownership.json")
         try removeManagedFileIfPresent(ownership)
@@ -378,6 +406,7 @@ private struct DesktopStillReceipt: Codable {
            (try FileManager.default.contentsOfDirectory(atPath: stillsDirectory.path)).isEmpty {
             try FileManager.default.removeItem(at: stillsDirectory)
         }
+        stillReceipts.removeAll()
     }
     private func removeOwnedStillFile(_ url: URL, directory: URL) throws {
         let standardizedDirectory = directory.standardizedFileURL
@@ -395,9 +424,10 @@ private struct DesktopStillReceipt: Codable {
         try fm.removeItem(at: url)
     }
     private func persistStillReceipts() throws {
-        let dir = library.root.appendingPathComponent("DesktopStills", isDirectory: true)
+        let dir = try Safety.child("DesktopStills", under: library.root)
+        try Safety.validateDirectoryIfPresent(dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try JSONEncoder().encode(stillReceipts).write(to: dir.appendingPathComponent("ownership.json"), options: .atomic)
+        try JSONEncoder().encode(stillReceipts).write(to: Safety.child("ownership.json", under: dir), options: .atomic)
     }
     func log(_ message: String) { diagnostics.append("\(Date().formatted(date: .omitted, time: .standard))  \(message)"); if diagnostics.count > 100 { diagnostics.removeFirst(diagnostics.count - 100) } }
     func shutdown() {

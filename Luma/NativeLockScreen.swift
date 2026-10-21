@@ -326,7 +326,8 @@ struct NativeReceipt: Codable {
     }
     private func commit(encoded: URL, title: String, assetID: String, root: URL) async throws -> NativeReceipt {
         let fm = FileManager.default
-        let aerials = root.appendingPathComponent("aerials"); let manifest = aerials.appendingPathComponent("manifest/entries.json")
+        try Safety.validateDirectoryIfPresent(root)
+        let manifest = try Safety.child("aerials/manifest/entries.json", under: root)
         let original: Data
         let existing = fm.fileExists(atPath: manifest.path)
         if existing { original = try Data(contentsOf: manifest) }
@@ -335,7 +336,7 @@ struct NativeReceipt: Codable {
             original = try Data(contentsOf: seed)
         }
         guard let catalog = try JSONSerialization.jsonObject(with: original) as? [String: Any] else { throw LumaError("The native catalog is invalid.") }
-        let videos = aerials.appendingPathComponent("videos"), thumbnails = aerials.appendingPathComponent("thumbnails")
+        let videos = try Safety.child("aerials/videos", under: root), thumbnails = try Safety.child("aerials/thumbnails", under: root)
         for folder in [videos, thumbnails, manifest.deletingLastPathComponent()] { try fm.createDirectory(at: folder, withIntermediateDirectories: true) }
         let destination = videos.appendingPathComponent(assetID + ".mov"), thumbnail = thumbnails.appendingPathComponent(assetID + ".png")
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: encoded)); generator.appliesPreferredTrackTransform = true; generator.maximumSize = CGSize(width: 960, height: 540)
@@ -343,30 +344,36 @@ struct NativeReceipt: Codable {
         guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { throw LumaError("Could not generate a lock screen preview.") }
         let newCatalog = try NativeCatalog.adding(assetID: assetID, title: title, video: destination, thumbnail: thumbnail, to: catalog)
         let encodedCatalog = try JSONSerialization.data(withJSONObject: newCatalog, options: [.sortedKeys])
-        let backups = library.root.appendingPathComponent("NativeBackups/\(assetID)"); try fm.createDirectory(at: backups, withIntermediateDirectories: true)
+        let backups = try Safety.child("NativeBackups/\(assetID)", under: library.root); try fm.createDirectory(at: backups, withIntermediateDirectories: true)
         try original.write(to: backups.appendingPathComponent("entries.json"), options: .atomic)
         var published = false
         do {
             try fm.copyItem(at: encoded, to: destination); try png.write(to: thumbnail, options: .atomic)
             try Task.checkCancellation()
-            if existing, try Data(contentsOf: manifest) != original { throw LumaError("The native catalog changed during installation. Retry to preserve the latest system settings.") }
+            if existing {
+                guard try Data(contentsOf: manifest) == original else { throw LumaError("The native catalog changed during installation. Retry to preserve the latest system settings.") }
+            } else if fm.fileExists(atPath: manifest.path) {
+                throw LumaError("A native catalog appeared during installation. Retry to preserve the new system settings.")
+            }
             try encodedCatalog.write(to: manifest, options: .atomic); published = true
             return NativeReceipt(assetID: assetID, title: title, videoPath: destination.path, thumbnailPath: thumbnail.path)
         } catch { if !published { try? fm.removeItem(at: destination); try? fm.removeItem(at: thumbnail) }; throw error }
     }
     private func select(assetID: String, root: URL) throws {
-        let url = root.appendingPathComponent("Store/Index.plist")
+        let url = try Safety.child("Store/Index.plist", under: root)
         let data = try Data(contentsOf: url)
         guard let original = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { throw LumaError("Unknown wallpaper store format. Choose the wallpaper in System Settings.") }
         let result = try NativeSelection.selecting(assetID: assetID, in: original)
-        let backup = library.root.appendingPathComponent("NativeBackups/selection-original.plist")
-        let installedBackup = library.root.appendingPathComponent("NativeBackups/selection-installed.plist")
+        let backup = try Safety.child("NativeBackups/selection-original.plist", under: library.root)
+        let installedBackup = try Safety.child("NativeBackups/selection-installed.plist", under: library.root)
         let previousInstall = try? Data(contentsOf: installedBackup)
         if previousInstall != data || !FileManager.default.fileExists(atPath: backup.path) { try data.write(to: backup, options: .atomic) }
         let updated = try PropertyListSerialization.data(fromPropertyList: result, format: .binary, options: 0)
+        // Record both sides before mutating the system selection, so a failed
+        // backup write cannot leave an untracked wallpaper change.
+        try updated.write(to: installedBackup, options: .atomic)
         guard try Data(contentsOf: url) == data else { throw LumaError("Wallpaper settings changed. The newer selection was preserved.") }
         try updated.write(to: url, options: .atomic)
-        try updated.write(to: library.root.appendingPathComponent("NativeBackups/selection-installed.plist"), options: .atomic)
     }
     func removeInstalled() {
         guard !busy else { return }
@@ -390,19 +397,21 @@ struct NativeReceipt: Codable {
     }
     private func removeInstalledChanges(in root: URL, openSettingsAfterward: Bool) throws {
         let fm = FileManager.default
+        try Safety.validateDirectoryIfPresent(root)
         let backupRoot = library.root.appendingPathComponent("NativeBackups", isDirectory: true)
         try validateBackupDirectoryIfPresent(backupRoot)
         let selectionInstalled = backupRoot.appendingPathComponent("selection-installed.plist")
         let selectionOriginal = backupRoot.appendingPathComponent("selection-original.plist")
         try validateBackupFileIfPresent(selectionInstalled)
         try validateBackupFileIfPresent(selectionOriginal)
-        let manifest = root.appendingPathComponent("aerials/manifest/entries.json")
+        let manifest = try Safety.child("aerials/manifest/entries.json", under: root)
         let data = try Data(contentsOf: manifest)
-        guard let original = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw LumaError("The catalog could not be read.") }
+        guard let original = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              original["assets"] is [[String: Any]], original["categories"] is [[String: Any]] else { throw LumaError("The native catalog schema is not recognized. No catalog records were removed.") }
         let owned = (original["assets"] as? [[String: Any]] ?? []).filter { ($0["categories"] as? [String])?.contains(NativeCatalog.categoryID) == true }
         let updated = NativeCatalog.removingOwned(from: original)
         // Restore a selection only when it still exactly matches our own write.
-        let store = root.appendingPathComponent("Store/Index.plist")
+        let store = try Safety.child("Store/Index.plist", under: root)
         if let installed = try? Data(contentsOf: library.root.appendingPathComponent("NativeBackups/selection-installed.plist")), let current = try? Data(contentsOf: store), current == installed,
            let backup = try? Data(contentsOf: library.root.appendingPathComponent("NativeBackups/selection-original.plist")) { try backup.write(to: store, options: .atomic) }
         guard try Data(contentsOf: manifest) == data else { throw LumaError("The catalog changed. Retry removal.") }
@@ -411,7 +420,8 @@ struct NativeReceipt: Codable {
         // the catalog update without touching files owned by macOS or Steam.
         let backupIDs = recordedAssetIDs
         let ownedIDs = owned.compactMap { $0["id"] as? String }.filter { UUID(uuidString: $0) != nil }
-        for id in Set(ownedIDs + backupIDs) {
+        let receiptIDs = receipt.flatMap { UUID(uuidString: $0.assetID)?.uuidString }.map { [$0] } ?? []
+        for id in Set(ownedIDs + backupIDs + receiptIDs) {
             for path in ["aerials/videos/\(id).mov", "aerials/thumbnails/\(id).png"] {
                 let file = try Safety.child(path, under: root)
                 try validateBackupFileIfPresent(file)
@@ -429,6 +439,9 @@ struct NativeReceipt: Codable {
             try fm.removeItem(at: file)
         }
         try removeBackupDirectoryIfEmpty(backupRoot)
+        let receiptFile = try Safety.child("native-receipt.json", under: library.root)
+        try validateBackupFileIfPresent(receiptFile)
+        if fm.fileExists(atPath: receiptFile.path) { try fm.removeItem(at: receiptFile) }
         receipt = nil
         status = "Luma's native collection was removed."
         if openSettingsAfterward && opensSettings { openSettings() }

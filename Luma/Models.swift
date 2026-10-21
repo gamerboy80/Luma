@@ -70,6 +70,32 @@ struct LumaError: LocalizedError {
     var errorDescription: String? { message }
 }
 enum Safety {
+    static func validateDirectoryIfPresent(_ url: URL) throws {
+        let attributes: [FileAttributeKey: Any]
+        do { attributes = try FileManager.default.attributesOfItem(atPath: url.path) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return }
+        guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+            throw LumaError("\(url.path) is not a real managed directory. It was left untouched.")
+        }
+    }
+    static func validateProjectTree(_ root: URL) throws {
+        try validateDirectoryIfPresent(root)
+        guard FileManager.default.fileExists(atPath: root.path) else { throw LumaError("The project folder no longer exists.") }
+        var readError: Error?
+        guard let enumerator = FileManager.default.enumerator(at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey],
+            errorHandler: { _, error in readError = error; return false }) else { throw LumaError("Cannot read the selected project folder.") }
+        var count = 0
+        for case let url as URL in enumerator {
+            count += 1
+            guard count <= 100_000 else { throw LumaError("The project contains too many files.") }
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isSymbolicLink != true, values.isDirectory == true || values.isRegularFile == true else {
+                throw LumaError("The project contains a symbolic link or special file. Copy only regular files into the project first.")
+            }
+        }
+        if let readError { throw readError }
+    }
     static func child(_ relative: String, under root: URL) throws -> URL {
         let normalized = relative.replacingOccurrences(of: "\\", with: "/")
         guard !normalized.isEmpty, !normalized.hasPrefix("/"), !normalized.contains("\0"),

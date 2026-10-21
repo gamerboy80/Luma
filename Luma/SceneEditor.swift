@@ -23,6 +23,7 @@ struct EditorProject: Identifiable, Codable, Hashable {
     @Published private(set) var recentProjectIDs: [UUID] = []
     private let base: URL
     private let indexURL: URL
+    private var loadError: String?
     let library: LibraryStore
 
     init(library: LibraryStore) {
@@ -40,16 +41,23 @@ struct EditorProject: Identifiable, Codable, Hashable {
                 let values = try indexURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
                 guard values.isRegularFile == true, values.isSymbolicLink != true else { throw LumaError("The editor project index is not a regular Luma file.") }
             }
-            if let data = try? Data(contentsOf: indexURL) {
+            if FileManager.default.fileExists(atPath: indexURL.path) {
+                let data = try Data(contentsOf: indexURL)
                 let index = try JSONDecoder().decode(EditorProjectIndex.self, from: data)
                 projects = index.projects
                 recentProjectIDs = index.recentProjectIDs
             }
             try validateIndex()
-        } catch { library.error = "Editor projects could not be loaded: \(error.localizedDescription)" }
+        } catch {
+            loadError = error.localizedDescription
+            projects = []; recentProjectIDs = []
+            library.error = "Editor projects could not be loaded. The original index was preserved; recover it before editing: \(error.localizedDescription)"
+        }
     }
 
     func create(title: String = "Untitled Scene") throws -> EditorProject {
+        try requireWritable()
+        let previousProjects = projects, previousRecents = recentProjectIDs
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title.count <= 120 else { throw LumaError("Use a project name between 1 and 120 characters.") }
         let id = UUID(), folderName = id.uuidString
@@ -62,10 +70,12 @@ struct EditorProject: Identifiable, Codable, Hashable {
             try SceneProjectPackage(entries: [SceneProjectPackage.Entry(name: "scene.json", bytes: JSONSerialization.data(withJSONObject: scene, options: [.sortedKeys, .fragmentsAllowed]))]).encoded().write(to: folder.appendingPathComponent("scene.pkg"), options: .atomic)
             let item = EditorProject(id: id, folderName: folderName, title: title, entry: "scene.pkg", lastOpened: Date(), scriptApprovalFingerprint: nil, scriptsEnabled: false)
             projects.insert(item, at: 0); markRecent(item.id); try persist(); return item
-        } catch { try? FileManager.default.removeItem(at: folder); throw error }
+        } catch { projects = previousProjects; recentProjectIDs = previousRecents; try? FileManager.default.removeItem(at: folder); throw error }
     }
 
     func importProject(_ source: URL) throws -> EditorProject {
+        try requireWritable()
+        let previousProjects = projects, previousRecents = recentProjectIDs
         let fm = FileManager.default
         var isDirectory: ObjCBool = false
         guard fm.fileExists(atPath: source.path, isDirectory: &isDirectory) else { throw LumaError("The selected project no longer exists.") }
@@ -90,45 +100,57 @@ struct EditorProject: Identifiable, Codable, Hashable {
             let document = try SceneProjectDocument(folder: destination)
             let item = EditorProject(id: id, folderName: folderName, title: document.title, entry: document.entry, lastOpened: Date(), scriptApprovalFingerprint: nil, scriptsEnabled: false)
             projects.insert(item, at: 0); markRecent(id); try persist(); return item
-        } catch { try? fm.removeItem(at: destination); throw error }
+        } catch { projects = previousProjects; recentProjectIDs = previousRecents; try? fm.removeItem(at: destination); throw error }
     }
 
     func duplicate(_ id: UUID) throws -> EditorProject {
+        try requireWritable()
+        let previousProjects = projects, previousRecents = recentProjectIDs
         guard let original = projects.first(where: { $0.id == id }) else { throw LumaError("This editor project is no longer in the project list.") }
         let newID = UUID(), folderName = newID.uuidString, destination = base.appendingPathComponent(folderName, isDirectory: true)
         let source = folder(for: original)
-        try Self.validateTree(source); try FileManager.default.copyItem(at: source, to: destination)
+        try Self.validateTree(source)
         do {
+            try FileManager.default.copyItem(at: source, to: destination)
             let copy = try SceneProjectDocument(folder: destination)
             copy.title = "\(original.title) Copy"; try copy.save()
             let item = EditorProject(id: newID, folderName: folderName, title: copy.title, entry: copy.entry, lastOpened: Date(), scriptApprovalFingerprint: nil, scriptsEnabled: false)
             projects.insert(item, at: 0); markRecent(newID); try persist(); return item
-        } catch { try? FileManager.default.removeItem(at: destination); throw error }
+        } catch { projects = previousProjects; recentProjectIDs = previousRecents; try? FileManager.default.removeItem(at: destination); throw error }
     }
 
     func rename(_ id: UUID, to rawTitle: String) throws {
+        try requireWritable()
         let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title.count <= 120 else { throw LumaError("Use a project name between 1 and 120 characters.") }
         guard let index = projects.firstIndex(where: { $0.id == id }) else { throw LumaError("This editor project is no longer in the project list.") }
         let document = try SceneProjectDocument(folder: folder(for: projects[index]))
         document.title = title; try document.save()
-        projects[index].title = title
-        projects[index].scriptApprovalFingerprint = nil
-        projects[index].scriptsEnabled = false
-        try persist()
+        try update(id) { item in
+            item.title = title; item.scriptApprovalFingerprint = nil; item.scriptsEnabled = false
+        }
     }
 
     func update(_ id: UUID, _ change: (inout EditorProject) -> Void) throws {
         guard let index = projects.firstIndex(where: { $0.id == id }) else { throw LumaError("This editor project is no longer in the project list.") }
-        change(&projects[index]); try persist()
+        try requireWritable()
+        let previous = projects[index]
+        change(&projects[index])
+        do { try persist() } catch { projects[index] = previous; throw error }
     }
 
     func opened(_ id: UUID) {
         guard let index = projects.firstIndex(where: { $0.id == id }) else { return }
-        projects[index].lastOpened = Date(); markRecent(id); try? persist()
+        let previousProjects = projects, previousRecents = recentProjectIDs
+        projects[index].lastOpened = Date(); markRecent(id)
+        do { try persist() } catch {
+            projects = previousProjects; recentProjectIDs = previousRecents
+            library.error = "Could not save recent projects: \(error.localizedDescription)"
+        }
     }
 
     func export(_ id: UUID, to parent: URL) throws -> URL {
+        try requireWritable()
         guard let project = projects.first(where: { $0.id == id }) else { throw LumaError("This editor project is no longer in the project list.") }
         let source = folder(for: project)
         try Self.validateTree(source)
@@ -136,12 +158,17 @@ struct EditorProject: Identifiable, Codable, Hashable {
         var destination = parent.appendingPathComponent(safeName, isDirectory: true)
         var suffix = 2
         while FileManager.default.fileExists(atPath: destination.path) { destination = parent.appendingPathComponent("\(safeName) \(suffix)", isDirectory: true); suffix += 1 }
-        try FileManager.default.copyItem(at: source, to: destination)
-        do { _ = try SceneProjectDocument(folder: destination); return destination }
-        catch { try? FileManager.default.removeItem(at: destination); throw error }
+        let sourcePath = source.resolvingSymlinksInPath().path
+        let destinationPath = destination.resolvingSymlinksInPath().path
+        guard destinationPath != sourcePath, !destinationPath.hasPrefix(sourcePath + "/") else { throw LumaError("Export to a folder outside this project to avoid copying it into itself.") }
+        do {
+            try FileManager.default.copyItem(at: source, to: destination)
+            _ = try SceneProjectDocument(folder: destination); return destination
+        } catch { try? FileManager.default.removeItem(at: destination); throw error }
     }
 
     func clearManagedProjects() throws {
+        try requireWritable()
         if FileManager.default.fileExists(atPath: base.path) {
             let values = try base.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard values.isDirectory == true, values.isSymbolicLink != true else { throw LumaError("The editor project folder is not a safe Luma directory. It was left untouched.") }
@@ -162,11 +189,19 @@ struct EditorProject: Identifiable, Codable, Hashable {
             try FileManager.default.removeItem(at: base)
         }
         projects = []; recentProjectIDs = []
+        loadError = "Luma data was cleared. Relaunch Luma to create new projects."
+    }
+
+    private func requireWritable() throws {
+        if let loadError { throw LumaError(loadError) }
+        try Safety.validateDirectoryIfPresent(library.root)
+        _ = try Safety.child("EditorProjects", under: library.root)
+        try Safety.validateDirectoryIfPresent(base)
     }
 
     private func markRecent(_ id: UUID) { recentProjectIDs.removeAll { $0 == id }; recentProjectIDs.insert(id, at: 0); if recentProjectIDs.count > 20 { recentProjectIDs = Array(recentProjectIDs.prefix(20)) } }
     func folder(for project: EditorProject) -> URL { base.appendingPathComponent(project.folderName, isDirectory: true) }
-    private func persist() throws { try JSONEncoder().encode(EditorProjectIndex(projects: projects, recentProjectIDs: recentProjectIDs)).write(to: indexURL, options: .atomic) }
+    private func persist() throws { try requireWritable(); _ = try Safety.child("projects.json", under: base); try JSONEncoder().encode(EditorProjectIndex(projects: projects, recentProjectIDs: recentProjectIDs)).write(to: indexURL, options: .atomic) }
     private func validateIndex() throws {
         let ids = Set(projects.map(\.id))
         guard ids.count == projects.count, projects.count <= 10_000 else { throw LumaError("The editor project list contains duplicate IDs or too many entries.") }
@@ -179,17 +214,9 @@ struct EditorProject: Identifiable, Codable, Hashable {
     }
 
     static func validateTree(_ root: URL) throws {
-        let rootValues = try root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard rootValues.isDirectory == true, rootValues.isSymbolicLink != true else { throw LumaError("The project root must be a real directory, not a symbolic link.") }
-        guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey]) else { throw LumaError("Cannot read the selected project folder.") }
-        var count = 0
-        for case let url as URL in e {
-            count += 1; guard count <= 100_000 else { throw LumaError("This project contains too many files.") }
-            let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey])
-            guard values.isSymbolicLink != true else { throw LumaError("The project contains a symbolic link. Copy its target into the project first.") }
-            let relative = String(url.path.dropFirst(root.path.count + 1)); _ = try Safety.child(relative, under: root)
-        }
+        try Safety.validateProjectTree(root)
     }
+
 }
 
 private struct EditorProjectIndex: Codable { var projects: [EditorProject]; var recentProjectIDs: [UUID] }
@@ -250,6 +277,7 @@ struct SceneProjectPackage {
     @Published private(set) var scene: [String: Any]
     private var package: SceneProjectPackage?
     private var sceneEntryName: String?
+    private var originalEntryBytes = Data()
     private var isLooseScene = false
     private var undoStack: [Data] = []
     private var redoStack: [Data] = []
@@ -265,14 +293,15 @@ struct SceneProjectPackage {
               let file = project["file"] as? String else { throw LumaError("This editor supports Wallpaper Engine scene projects with a valid project.json.") }
         entry = file; title = project["title"] as? String ?? folder.lastPathComponent
         let fileURL = try Safety.child(file, under: folder)
+        originalEntryBytes = try Data(contentsOf: fileURL, options: .mappedIfSafe)
         if fileURL.pathExtension.lowercased() == "pkg" {
-            let parsed = try SceneProjectPackage(data: Data(contentsOf: fileURL, options: .mappedIfSafe))
+            let parsed = try SceneProjectPackage(data: originalEntryBytes)
             guard let sceneFile = parsed.entries.first(where: { $0.name.lowercased() == "scene.json" }) ?? parsed.entries.first(where: { $0.name.lowercased().hasSuffix("/scene.json") }) else { throw LumaError("This scene package has no scene.json document to edit.") }
             package = parsed; sceneEntryName = sceneFile.name
             scene = try Self.decodeScene(sceneFile.bytes)
         } else if fileURL.pathExtension.lowercased() == "json" {
             isLooseScene = true; sceneEntryName = file
-            scene = try Self.decodeScene(Data(contentsOf: fileURL))
+            scene = try Self.decodeScene(originalEntryBytes)
         } else { throw LumaError("This scene entry cannot be edited. Choose a scene.pkg or scene.json project.") }
         try Self.validateScene(scene)
     }
@@ -295,10 +324,8 @@ struct SceneProjectPackage {
     func updateLayer(at index: Int, key: String, value: Any) throws {
         guard objects.indices.contains(index), key.range(of: "^[A-Za-z][A-Za-z0-9_]{0,63}$", options: .regularExpression) != nil,
               JSONSerialization.isValidJSONObject(["value": value]) else { throw LumaError("The layer change is invalid.") }
-        try checkpoint()
         var all = objects, layer = all[index]; layer[key] = value; all[index] = layer
-        if scene["objects"] is [Any] { scene["objects"] = all } else { scene["layers"] = all }
-        try Self.validateScene(scene)
+        try commitLayers(all)
     }
 
     func renameLayer(at index: Int, to value: String) throws { try updateLayer(at: index, key: "name", value: String(value.prefix(120))) }
@@ -306,52 +333,48 @@ struct SceneProjectPackage {
     func setLocked(at index: Int, locked: Bool) throws { try updateLayer(at: index, key: "locked", value: locked) }
     func reorderLayer(from source: Int, to destination: Int) throws {
         var all = objects; guard all.indices.contains(source), destination >= 0, destination < all.count else { throw LumaError("The selected layer position is invalid.") }
-        try checkpoint()
         let value = all.remove(at: source); all.insert(value, at: destination)
-        if scene["objects"] is [Any] { scene["objects"] = all } else { scene["layers"] = all }
+        try commitLayers(all)
     }
     func duplicateLayer(at index: Int) throws {
         var all = objects; guard all.indices.contains(index), all.count < 5000 else { throw LumaError("This scene cannot contain another layer.") }
-        try checkpoint()
         var copy = all[index]
-        if let id = copy["id"] as? NSNumber { copy["id"] = max((all.compactMap { ($0["id"] as? NSNumber)?.intValue }.max() ?? 0) + 1, id.intValue + 1) }
+        if copy["id"] is NSNumber { copy["id"] = try nextLayerID() }
         else if let id = copy["id"] as? String { copy["id"] = "\(id)-copy-\(UUID().uuidString.prefix(8))" }
         copy["name"] = "\(copy["name"] as? String ?? "Layer") Copy"
         all.insert(copy, at: index + 1)
-        if scene["objects"] is [Any] { scene["objects"] = all } else { scene["layers"] = all }
+        try commitLayers(all)
     }
     func deleteLayer(at index: Int) throws {
         var all = objects; guard all.indices.contains(index) else { throw LumaError("The selected layer no longer exists.") }
-        try checkpoint()
         all.remove(at: index)
-        if scene["objects"] is [Any] { scene["objects"] = all } else { scene["layers"] = all }
+        try commitLayers(all)
     }
     func addTextLayer() throws {
         var all = objects; guard all.count < 5000 else { throw LumaError("This scene has reached its layer limit.") }
-        try checkpoint()
-        let (width, height) = resolution, nextID = (all.compactMap { ($0["id"] as? NSNumber)?.intValue }.max() ?? 0) + 1
+        let (width, height) = resolution, nextID = try nextLayerID()
         all.append(["id": nextID, "name": "Text", "text": "New Text", "font": "systemfont_arial", "pointsize": 64,
                     "origin": "\(width / 2) \(height / 2) 0", "scale": "1 1 1", "angles": "0 0 0", "size": "800 160",
                     "color": "1 1 1", "horizontalalign": "center", "verticalalign": "center", "anchor": "none", "visible": true])
-        if scene["objects"] is [Any] { scene["objects"] = all } else { scene["layers"] = all }
+        try commitLayers(all)
     }
     func replaceLayer(at index: Int, with value: [String: Any]) throws {
         guard objects.indices.contains(index), JSONSerialization.isValidJSONObject(value),
               (try JSONSerialization.data(withJSONObject: value)).count <= 1024 * 1024 else { throw LumaError("The layer JSON is invalid or too large.") }
-        try checkpoint()
         var all = objects; all[index] = value
-        if scene["objects"] is [Any] { scene["objects"] = all } else { scene["layers"] = all }
+        try commitLayers(all)
     }
     func updateGeneral(_ value: [String: Any]) throws {
         guard JSONSerialization.isValidJSONObject(value), (try JSONSerialization.data(withJSONObject: value)).count <= 1024 * 1024 else { throw LumaError("Scene settings JSON is invalid or too large.") }
-        try checkpoint(); scene["general"] = value
+        var candidate = scene; candidate["general"] = value
+        try Self.validateScene(candidate)
+        try checkpoint(); scene = candidate
     }
     func transformLayers(indices: Set<Int>, dx: Double = 0, dy: Double = 0, widthDelta: Double = 0, heightDelta: Double = 0, rotationDelta: Double = 0, snapToGrid: Bool) throws {
         guard dx.isFinite, dy.isFinite, widthDelta.isFinite, heightDelta.isFinite, rotationDelta.isFinite,
               !indices.isEmpty, indices.allSatisfy({ objects.indices.contains($0) }) else { throw LumaError("The selected layer transform is invalid.") }
         let editableIndices = indices.filter { objects[$0]["locked"] as? Bool != true }
         guard !editableIndices.isEmpty else { throw LumaError("Unlock the selected layer before changing its transform.") }
-        try checkpoint()
         var all = objects
         func vector(_ value: Any?) -> [Double]? {
             if let string = value as? String {
@@ -382,7 +405,18 @@ struct SceneProjectPackage {
             }
             all[index] = layer
         }
-        if scene["objects"] is [Any] { scene["objects"] = all } else { scene["layers"] = all }
+        try commitLayers(all)
+    }
+    private func nextLayerID() throws -> Int {
+        let maximum = objects.compactMap { ($0["id"] as? NSNumber)?.doubleValue }.max() ?? 0
+        guard maximum.isFinite, maximum < 9_007_199_254_740_991 else { throw LumaError("The scene's numeric layer IDs are exhausted. Use a smaller ID before adding or duplicating a layer.") }
+        return Int(max(0, maximum)) + 1
+    }
+    private func commitLayers(_ layers: [[String: Any]]) throws {
+        var candidate = scene
+        candidate[scene["objects"] != nil ? "objects" : "layers"] = layers
+        try Self.validateScene(candidate)
+        try checkpoint(); scene = candidate
     }
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
@@ -403,6 +437,14 @@ struct SceneProjectPackage {
     }
     func save() throws {
         try Self.validateScene(scene)
+        let sceneURL = try Safety.child(entry, under: folder)
+        guard try Data(contentsOf: sceneURL, options: .mappedIfSafe) == originalEntryBytes else {
+            throw LumaError("The scene file changed outside this editor. Reopen the project before saving to preserve those changes.")
+        }
+        let projectURL = try Safety.child("project.json", under: folder)
+        guard var project = try JSONSerialization.jsonObject(with: Data(contentsOf: projectURL)) as? [String: Any] else { throw LumaError("The project metadata is no longer valid. Reopen the project before saving.") }
+        project["title"] = title
+        let encodedProject = try JSONSerialization.data(withJSONObject: project, options: [.sortedKeys, .fragmentsAllowed])
         let encodedScene = try JSONSerialization.data(withJSONObject: scene, options: [.sortedKeys, .fragmentsAllowed])
         if let package, let sceneEntryName {
             var updated = package
@@ -412,13 +454,12 @@ struct SceneProjectPackage {
             let bytes = try updated.encoded()
             _ = try SceneProjectPackage(data: bytes)
             try bytes.write(to: pkgURL, options: .atomic)
+            originalEntryBytes = bytes
         } else if isLooseScene, let sceneEntryName {
             try encodedScene.write(to: Safety.child(sceneEntryName, under: folder), options: .atomic)
+            originalEntryBytes = encodedScene
         }
-        let projectURL = try Safety.child("project.json", under: folder)
-        var project = try JSONSerialization.jsonObject(with: Data(contentsOf: projectURL)) as? [String: Any] ?? [:]
-        project["title"] = title
-        try JSONSerialization.data(withJSONObject: project, options: [.sortedKeys, .fragmentsAllowed]).write(to: projectURL, options: .atomic)
+        try encodedProject.write(to: projectURL, options: .atomic)
     }
 
     private static func decodeScene(_ data: Data) throws -> [String: Any] {
@@ -428,7 +469,15 @@ struct SceneProjectPackage {
     }
     private static func validateScene(_ scene: [String: Any]) throws {
         guard JSONSerialization.isValidJSONObject(scene), let encoded = try? JSONSerialization.data(withJSONObject: scene), encoded.count <= 64 * 1024 * 1024 else { throw LumaError("The scene document is invalid or exceeds 64 MB.") }
-        if let objects = scene["objects"] as? [Any] { guard objects.count <= 5000, objects.allSatisfy({ $0 is [String: Any] }) else { throw LumaError("The scene contains too many or malformed object layers.") } }
-        if let layers = scene["layers"] as? [Any] { guard layers.count <= 5000, layers.allSatisfy({ $0 is [String: Any] }) else { throw LumaError("The scene contains too many or malformed layers.") } }
+        for key in ["objects", "layers"] where scene[key] != nil {
+            guard let layers = scene[key] as? [[String: Any]], layers.count <= 5000 else { throw LumaError("The scene contains too many or malformed \(key).") }
+            var ids = Set<String>()
+            for layer in layers {
+                guard let id = layer["id"] else { continue }
+                guard id is String || id is NSNumber else { throw LumaError("Layer IDs must be strings or numbers.") }
+                let text = String(describing: id)
+                guard !text.isEmpty, text.utf8.count <= 128, ids.insert(text).inserted else { throw LumaError("Layer IDs must be unique and at most 128 bytes.") }
+            }
+        }
     }
 }

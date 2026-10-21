@@ -62,6 +62,15 @@ import AppKit
         try expect((reloaded.scene["general"] as? [String: Any])?["unknownSetting"] != nil, "unknown scene JSON fields survive edits")
         let roundTripPackage = try SceneProjectPackage(data: Data(contentsOf: packageURL))
         try expect(roundTripPackage.entries.first(where: { $0.name == "plugins/custom.bin" })?.bytes == unknownPayload, "unknown PKGV entries survive saves")
+        let externalEditDocument = try SceneProjectDocument(folder: projectFolder)
+        var externalPackage = roundTripPackage
+        externalPackage.entries.append(.init(name: "external/change.bin", bytes: Data([42])))
+        let externalBytes = try externalPackage.encoded()
+        try externalBytes.write(to: packageURL, options: .atomic)
+        try rejects({ try externalEditDocument.save() }, "saving over an external scene edit")
+        let preservedExternalBytes = try Data(contentsOf: packageURL)
+        try expect(preservedExternalBytes == externalBytes, "external package edits are preserved")
+        try roundTripPackage.encoded().write(to: packageURL, options: .atomic)
 
         var duplicate = try store.duplicate(project.id)
         try expect(duplicate.title == "Round Trip Copy", "duplicate project receives a new title")
@@ -97,6 +106,35 @@ import AppKit
         let unsafeRoot = root.appendingPathComponent("unsafe-root")
         try FileManager.default.createSymbolicLink(at: unsafeRoot, withDestinationURL: projectFolder)
         try rejects({ _ = try store.importProject(unsafeRoot) }, "symbolic-link project root")
+        try rejects({ _ = try store.export(project.id, to: projectFolder) }, "exporting a project into itself")
+        let beforeInvalidLayer = document.objects[0]
+        try rejects({ try document.replaceLayer(at: 0, with: ["id": ["invalid": true]]) }, "invalid layer ID")
+        try expect(NSDictionary(dictionary: document.objects[0]).isEqual(to: beforeInvalidLayer), "rejected layer edits leave the document unchanged")
+        try document.replaceLayer(at: 0, with: ["id": Int.max, "text": "large ID"])
+        try rejects({ try document.duplicateLayer(at: 0) }, "overflowing numeric layer ID")
+        try expect(document.objects.count == 1, "failed duplication does not mutate the scene")
+
+        // A failed index write must roll back the in-memory project/recents list.
+        let indexURL = library.root.appendingPathComponent("EditorProjects/projects.json")
+        let originalIndex = try Data(contentsOf: indexURL)
+        try FileManager.default.removeItem(at: indexURL)
+        try FileManager.default.createDirectory(at: indexURL, withIntermediateDirectories: false)
+        let projectCount = store.projects.count, recents = store.recentProjectIDs
+        try rejects({ _ = try store.create(title: "Failed Save") }, "index save failure")
+        try expect(store.projects.count == projectCount && store.recentProjectIDs == recents, "failed index save rolls back project and recent entries")
+        try FileManager.default.removeItem(at: indexURL)
+        try originalIndex.write(to: indexURL)
+
+        let corruptBytes = Data("{invalid json".utf8)
+        try corruptBytes.write(to: indexURL)
+        let corruptStore = EditorProjectStore(library: library)
+        try rejects({ _ = try corruptStore.create() }, "creating over a corrupt project index")
+        let preservedIndex = try Data(contentsOf: indexURL)
+        try expect(preservedIndex == corruptBytes, "corrupt project index is preserved")
+        try originalIndex.write(to: indexURL)
+        let clearingStore = EditorProjectStore(library: library)
+        try clearingStore.clearManagedProjects()
+        try rejects({ _ = try clearingStore.create() }, "editing after Clear Data")
         print("PASS: \(checks) editor lifecycle, package round-trip, editing, history, and path safety checks")
     }
 }

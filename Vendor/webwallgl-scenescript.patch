@@ -1073,10 +1073,10 @@ index 7aa08cf..0498a33 100644
          }
 diff --git a/renderer/src/scene-script-runtime.ts b/renderer/src/scene-script-runtime.ts
 new file mode 100644
-index 0000000..6383e7b
+index 0000000..d0d1858
 --- /dev/null
 +++ b/renderer/src/scene-script-runtime.ts
-@@ -0,0 +1,616 @@
+@@ -0,0 +1,626 @@
 +import SceneScriptWorker from "./scene-script-worker.ts?worker&inline";
 +
 +type ScriptKind = "text" | "object";
@@ -1438,7 +1438,17 @@ index 0000000..6383e7b
 +      const record = this.records.get(String(message.id));
 +      if (record && message.error) record.opts.onError?.(new Error(String(message.error).slice(0, 200)), message.event);
 +      if (record && Array.isArray(message.errors)) for (const item of message.errors.slice(0, 16)) record.opts.onError?.(new Error(String(item.message || "Script error").slice(0, 180)), item.phase || message.event);
-+      if (record && message.event === "initialization" && message.ok) record.registered = true;
++      if (record && message.event === "initialization") {
++        if (message.ok) record.registered = true;
++        else {
++          // A rejected registration has no worker record. Do not send its queued
++          // lifecycle events and misreport their missing replies as a hang.
++          record.destroyed = true;
++          record.facade.disabled = true;
++          this.controls = this.controls.filter((item) => item.record !== record);
++          this.updates.delete(record.id);
++        }
++      }
 +      if (record && "result" in message && message.result !== undefined) record.result = message.result;
 +      if (record && message.event === "init" && record.kind === "text" && typeof message.result === "string" && record.opts.layer) record.opts.layer.text = message.result;
 +      if (record) {
@@ -2084,7 +2094,7 @@ index 5e4a7e1..c83fb29 100644
      setQuality?(q: QualityOptions): void;
      /** 视频纹理上传倍率热更（0=自动交给帧率守门，>0 固定；显式值优先于自动下坡） */
 diff --git a/renderer/vendor/we-scene/render/text.js b/renderer/vendor/we-scene/render/text.js
-index 704ea3b..cc40e96 100644
+index 704ea3b..d89d7b7 100644
 --- a/renderer/vendor/we-scene/render/text.js
 +++ b/renderer/vendor/we-scene/render/text.js
 @@ -177,6 +177,10 @@ class Vec3 {
@@ -2152,14 +2162,14 @@ index 704ea3b..cc40e96 100644
 +  }
 +  const compartment = new globalThis.Compartment()
 +  const hooks = SCRIPT_HOOK_NAMES.map((name) => `${name}: typeof ${name} === "function" ? ${name} : null`).join(',')
-+  const factorySource = `(function(${params.join(',')}) { ${SANDBOX_PRELUDE}${body}; const __sceneHooks = {${hooks}}; return {
++  const factorySource = `((__sourceOf) => (function(${params.join(',')}) { ${SANDBOX_PRELUDE}${body}; const __sceneHooks = {${hooks}}; return {
 +    ...__sceneHooks,
 +    _invoke: (name, serialized) => { const fn = __sceneHooks[name]; if (typeof fn !== 'function') return JSON.stringify({ defined: false }); const args = JSON.parse(serialized); if (args[0] && typeof args[0] === 'object' && args[0].worldPosition && typeof args[0].worldPosition === 'object') { const p = args[0].worldPosition; args[0].worldPosition = new Vec3(p.x || 0, p.y || 0, p.z || 0); } if (name === 'resizeScreen' && args[0] && typeof args[0] === 'object') args[0] = new Vec3(args[0].x || 0, args[0].y || 0, args[0].z || 0); if ((name === 'init' || name === 'update' || name === 'animationEvent') && args[0] && typeof args[0] === 'object' && 'x' in args[0] && 'y' in args[0] && 'z' in args[0]) args[0] = new Vec3(args[0].x, args[0].y, args[0].z); const value = fn(...args); return JSON.stringify({ defined: value !== undefined, value }); },
 +    _invokeCallback: (fn) => { const value = fn(); return JSON.stringify({ defined: value !== undefined, value }); },
 +    _readShared: () => JSON.stringify(shared),
 +    _updateShared: (serialized) => { const next = JSON.parse(serialized); for (const key of Object.keys(shared)) if (!(key in next) && typeof shared[key] !== 'function') delete shared[key]; for (const key of Object.keys(next)) shared[key] = next[key]; },
-+    _source: (name) => { const fn = __sceneHooks[name]; return typeof fn === 'function' ? Function.prototype.toString.call(fn) : ''; },
-+  }; })`
++    _source: (name) => { const fn = __sceneHooks[name]; return typeof fn === 'function' ? __sourceOf(fn) : ''; },
++  }; }))((fn) => Function.prototype.toString.call(fn))`
 +  const factoryInCompartment = compartment.evaluate(factorySource)
 +  const parseJSON = compartment.evaluate('(serialized) => JSON.parse(serialized)')
 +  const sharedIndex = params.indexOf('shared')
@@ -2384,7 +2394,7 @@ index 704ea3b..cc40e96 100644
 -  if (!fns || (!fns.update && !hasMediaHook && !hasApplyHook && !hasAnimEventHook && !hasResizeHook)) return null
 +  const hasDestroyHook = !!(fns && typeof fns.destroy === 'function')
 +  const hasGeneralSettingsHook = !!(fns && typeof fns.applyGeneralSettings === 'function')
-+  if (!fns || (!fns.update && !hasMediaHook && !hasApplyHook && !hasAnimEventHook && !hasResizeHook && !hasDestroyHook && !hasGeneralSettingsHook)) return null
++  if (!fns || (!fns.update && !hasMediaHook && !hasApplyHook && !hasAnimEventHook && !hasResizeHook && !hasDestroyHook && !hasGeneralSettingsHook && typeof fns.init !== 'function')) return null
    // [we-scene patch] update 的首帧 value 语义按脚本形态区分：
    //  - 写回式（打字机模板）：update 把入参 value 当作**累积中的当前文本读入**
    //    （addLastChar(value) / handleBlinker(value) / queuedWord===value），返回值

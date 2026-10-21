@@ -83,5 +83,89 @@ import AVFoundation
         try await SceneMovieExporter.export(host:host,output:movie,seconds:1,fps:12,width:320,height:180,progress:{_ in})
         let asset=AVURLAsset(url:movie);let duration=try await asset.load(.duration).seconds
         guard duration>0.8,try await asset.loadTracks(withMediaType:.video).count == 1 else {throw LumaError("Scene movie is incomplete")}
+        host.stop(); window.close()
+        try await verifyScripts(root: root, resources: resources, template: object)
+    }
+
+    @MainActor static func verifyScripts(root: URL, resources: URL, template: [String: Any]) async throws {
+        func project(_ name: String, code: String) throws -> URL {
+            let folder = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            var object = template
+            var layer = (object["objects"] as! [[String: Any]])[0]
+            layer["text"] = ["value": "BASE", "script": code]
+            object["objects"] = [layer]
+            let scene = try JSONSerialization.data(withJSONObject: object)
+            var package = Data()
+            func number(_ n: Int) { var n = UInt32(n).littleEndian; withUnsafeBytes(of: &n) { package.append(contentsOf: $0) } }
+            number(8); package.append(Data("PKGV0012".utf8)); number(1)
+            number(10); package.append(Data("scene.json".utf8)); number(0); number(scene.count); package.append(scene)
+            try package.write(to: folder.appendingPathComponent("scene.pkg"))
+            try Data("{\"title\":\"Script fixture\",\"type\":\"scene\",\"file\":\"scene.pkg\"}".utf8).write(to: folder.appendingPathComponent("project.json"))
+            return folder
+        }
+        func run(_ name: String, code: String, enabled: Bool, staleApproval: Bool = false, rejected: Bool = false, timeoutEvent: String? = nil) async throws {
+            let folder = try project(name, code: code)
+            let review = try SceneScriptReview.inspect(folder: folder)
+            guard review.canApprove else { throw LumaError("Script fixture did not produce a complete source review (\(review.sources.count) sources): \(review.issues.joined(separator: "; "))") }
+            var wallpaper = Wallpaper(title: name, kind: .scene, folder: name, entry: "scene.pkg")
+            wallpaper.trustedScripts = enabled
+            wallpaper.scriptApprovalFingerprint = staleApproval ? "stale-fingerprint" : review.fingerprint
+            let host = SceneHost(folder: folder, assets: nil, wallpaper: wallpaper, configuration: DisplayConfiguration(), preferences: AppPreferences(), resources: resources)
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 180), styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false; window.ignoresMouseEvents = true; window.contentView = host.webView; window.orderFrontRegardless()
+            defer { host.stop(); window.close() }
+            var failure: String?, diagnostics: [String] = []
+            host.failed = { failure = $0 }; host.diagnostic = { diagnostics.append($0) }
+            let deadline = Date().addingTimeInterval(35)
+            while !host.didBecomeReady {
+                if let failure { throw LumaError(failure) }
+                guard Date() < deadline else { throw LumaError("Script fixture did not render: \(name); \(diagnostics.joined(separator: "; "))") }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            if let event = timeoutEvent {
+                let timeout = Date().addingTimeInterval(8)
+                while !diagnostics.contains(where: { $0.contains("timed out during \(event)") }) {
+                    guard Date() < timeout else { throw LumaError("No watchdog timeout for \(name): \(diagnostics.joined(separator: "; "))") }
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+                let before = await host.editorTime()
+                try await Task.sleep(for: .milliseconds(250))
+                guard await host.editorTime() > before else { throw LumaError("Render clock froze after \(name) timed out.") }
+                _ = try await host.capture(time: 0.2, width: 320, height: 180)
+                let count = diagnostics.filter { $0.contains("timed out") }.count
+                try await Task.sleep(for: .milliseconds(250))
+                guard diagnostics.filter({ $0.contains("timed out") }).count == count else { throw LumaError("Timed-out scripts continued receiving events.") }
+            } else {
+                let expected = enabled && !staleApproval && !rejected ? 123.0 : 960.0
+                host.setPlaying(true)
+                let limit = Date().addingTimeInterval(5)
+                var properties: [String: Any]?
+                repeat {
+                    try await Task.sleep(for: .milliseconds(100))
+                    properties = try await host.editorLayerProperties(id: "1")
+                    if enabled && !staleApproval && !rejected && (properties?["origin"] as? [NSNumber])?.first?.doubleValue == expected { break }
+                } while Date() < limit
+                let origin = properties?["origin"] as? [NSNumber]
+                let issues = await host.editorScriptDiagnostics()
+                guard origin?.first?.doubleValue == expected else { throw LumaError("Script approval/clock check failed for \(name): \(Safety.json(properties ?? [:])); time \(await host.editorTime()); \((diagnostics + issues).joined(separator: "; "))") }
+                if rejected {
+                    guard !(diagnostics + issues).isEmpty, !diagnostics.contains(where: { $0.contains("timed out") }) else { throw LumaError("A rejected script caused a false watchdog timeout.") }
+                }
+            }
+            host.stop()
+            guard !host.didBecomeReady else { throw LumaError("Stopped host remained ready.") }
+            print("PASS: SceneScript \(name)")
+        }
+        let clock = "export function update(value) { thisLayer.origin = new Vec3(typeof engine.runtime === 'number' && typeof engine.timeOfDay === 'number' ? 123 : 456, 540, 0); return 'CLOCK OK'; }"
+        try await run("reviewed-clock", code: clock, enabled: true)
+        try await run("init-only", code: clock.replacingOccurrences(of: "function update", with: "function init"), enabled: true)
+        try await run("disabled-scripts", code: clock, enabled: false)
+        try await run("stale-approval", code: clock, enabled: true, staleApproval: true)
+        try await run("syntax-error", code: "export function update(value) { broken( }", enabled: true, rejected: true)
+        try await run("capability-boundary", code: "export function update(value) { let leaked = false; try { leaked = thisLayer.getParent.constructor('return typeof fetch !== typeof undefined || typeof postMessage !== typeof undefined || typeof document !== typeof undefined')(); } catch (error) {} thisLayer.origin = new Vec3(!leaked && typeof fetch === 'undefined' && typeof document === 'undefined' && (typeof window === 'undefined' || typeof window.document === 'undefined') ? 123 : 456, 540, 0); return 'BOUNDARY'; }", enabled: true)
+        try await run("initialization-loop", code: "while (true) {} export function update(value) { return value; }", enabled: true, timeoutEvent: "initialization")
+        try await run("init-hook-loop", code: "export function init(value) { while (true) {} } export function update(value) { return value; }", enabled: true, timeoutEvent: "init")
+        try await run("update-loop", code: "export function update(value) { while (true) {} }", enabled: true, timeoutEvent: "update")
     }
 }

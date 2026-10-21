@@ -261,6 +261,10 @@ private final class SteamOutputBuffer: @unchecked Sendable {
         status = "Downloaded. Importing into Luma…"
         do {
             try await downloaded(result, itemID)
+            if cancellationRequested {
+                status = "Imported successfully. Cancellation was requested during import, so the downloaded files were kept at \(result.path)."
+                release(); return
+            }
             // Remove only this exact item directory under the selected SteamCMD
             // installation. The SteamCMD executable, its parent directories, and
             // any other Workshop items are never touched.

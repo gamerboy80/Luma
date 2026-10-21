@@ -1,0 +1,112 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Release (${{ matrix.profile }})
+    runs-on: macos-26
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [standard, sandboxed]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: xcodebuild -version && xcrun swift --version
+      - name: Build
+        env:
+          LUMA_PROFILE: ${{ matrix.profile }}
+        run: |
+          mkdir -p build/Logs
+          if [[ "$LUMA_PROFILE" == sandboxed ]]; then
+            ./Scripts/build.sh --sandboxed 2>&1 | tee build/Logs/build.log
+          else
+            ./Scripts/build.sh 2>&1 | tee build/Logs/build.log
+          fi
+      - name: Verify and package
+        run: |
+          ./Scripts/package.sh
+          /usr/libexec/PlistBuddy -c 'Print :LSUIElement' build/Build/Products/Release/Luma.app/Contents/Info.plist | grep -qx true
+          /usr/libexec/PlistBuddy -c 'Print :LSMultipleInstancesProhibited' build/Build/Products/Release/Luma.app/Contents/Info.plist | grep -qx true
+      - name: Upload locally signed app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Luma-${{ matrix.profile }}-${{ runner.arch }}
+          path: dist/Luma.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: build-logs-${{ matrix.profile }}
+          path: build/Logs
+          retention-days: 14
+
+  test:
+    name: Tests (${{ matrix.suite }})
+    runs-on: macos-26
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [core, editor, instance, scenes]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Run isolated regressions
+        env:
+          LUMA_SUITE: ${{ matrix.suite }}
+        run: |
+          mkdir -p build/Logs
+          case "$LUMA_SUITE" in
+            core) ./Scripts/test.sh 2>&1 | tee build/Logs/test.log ;;
+            editor) ./Scripts/test-editor.sh 2>&1 | tee build/Logs/test.log ;;
+            instance) ./Scripts/test-instance.sh 2>&1 | tee build/Logs/test.log ;;
+            scenes) ./Scripts/test-scenes.sh 2>&1 | tee build/Logs/test.log ;;
+            *) exit 2 ;;
+          esac
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: test-logs-${{ matrix.suite }}
+          path: build/Logs
+          retention-days: 14
+
+  source-checks:
+    name: Source and workflow checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Check whitespace and shell syntax
+        run: |
+          git diff --check HEAD^ HEAD
+          for script in Scripts/*.sh; do bash -n "$script"; done
+      - name: Check workflow YAML
+        run: |
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |path| YAML.load_file(path) }'

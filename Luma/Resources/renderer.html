@@ -4,7 +4,7 @@
 <body><div id="wallpaper"></div><script src="webwallgl.js"></script><script>
 const send=(event,message='')=>window.webkit?.messageHandlers.luma.postMessage({event,message:String(message).slice(0,3000)});
 const originalFetch=window.fetch.bind(window);window.fetch=async(...args)=>{try{const r=await originalFetch(...args);if(!r.ok)send("diagnostic",String(args[0])+": HTTP "+r.status);return r}catch(e){send("diagnostic",String(args[0])+": "+e.message);throw e}};
-window.lumaMount=async options=>{try{window.wallpaper=await WebWallGL.mount(document.getElementById('wallpaper'),{...options,source:WebWallGL.httpSource('luma://wallpaper/project'),audio:{snapshot:()=>({left:new Float32Array(64),right:new Float32Array(64)})},media:WebWallGL.createMediaSource({hasMedia:false,state:0}),onReady:()=>send('ready'),onError:e=>send('error',e.message),onDiagnostic:(m,l)=>{if(l!=='info')send('diagnostic',m)}});send('ready')}catch(e){send('error',e.message)}};
+window.lumaMount=async options=>{try{window.wallpaper=await WebWallGL.mount(document.getElementById('wallpaper'),{...options,source:WebWallGL.httpSource('luma://wallpaper/project'),audio:{snapshot:()=>({left:new Float32Array(64),right:new Float32Array(64)})},media:WebWallGL.createMediaSource({hasMedia:false,state:0}),onReady:()=>{},onError:e=>send('error',e.message),onDiagnostic:(m,l)=>{if(l!=='info')send('diagnostic',m)}});send('ready')}catch(e){send('error',e.message)}};
 window.lumaCapture=async(time,width,height)=>{
  const controls=WebWallGL.editorOf(window.wallpaper);
  const blob=await controls.capture({time,width,height,type:'image/png'});

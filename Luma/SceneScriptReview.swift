@@ -16,6 +16,8 @@ struct SceneScriptReview: Sendable {
 
     // This reads source as data. It never creates a renderer or evaluates code.
     static func inspect(folder: URL) throws -> SceneScriptReview {
+        try Safety.validateDirectoryIfPresent(folder)
+        let folder = folder.resolvingSymlinksInPath().standardizedFileURL
         var review = SceneScriptReview()
         var hash = SHA256()
         var textBytes = 0
@@ -61,16 +63,25 @@ struct SceneScriptReview: Sendable {
             }
         }
         let manager = FileManager.default
-        guard let enumerator = manager.enumerator(at: folder, includingPropertiesForKeys: nil, errorHandler: { url, error in
-            review.issues.append("Cannot inspect \(url.lastPathComponent): \(error.localizedDescription)")
-            return review.issues.count < 20
-        }) else { throw LumaError("The scene folder cannot be read.") }
         var names: [String] = []
-        for case let file as URL in enumerator {
+        var directories: [(URL, String)] = [(folder, "")]
+        while let (directory, prefix) = directories.popLast() {
             try Task.checkCancellation()
-            files += 1
-            guard files <= 25_000 else { throw LumaError("This project has too many files to review completely.") }
-            names.append(String(file.path.dropFirst(folder.path.count + 1)))
+            do {
+                for file in try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
+                    files += 1
+                    guard files <= 25_000 else { throw LumaError("This project has too many files to review completely.") }
+                    // Build relative names from components. Foundation may return
+                    // /private/var URLs when the caller supplied /var (or /tmp).
+                    let relative = prefix + file.lastPathComponent
+                    names.append(relative)
+                    let info = try file.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                    if info.isDirectory == true, info.isSymbolicLink != true { directories.append((file, relative + "/")) }
+                }
+            } catch {
+                review.issues.append("Cannot inspect \(prefix): \(error.localizedDescription)")
+                if files > 25_000 || review.issues.count >= 20 { break }
+            }
         }
         for relative in names.sorted() {
             try Task.checkCancellation()
@@ -91,7 +102,7 @@ struct SceneScriptReview: Sendable {
                     try consume(Data(contentsOf: file), name: relative)
                 }
             } catch is CancellationError { throw CancellationError() }
-            catch { review.issues.append(error.localizedDescription) }
+            catch { review.issues.append("\(relative): \(error.localizedDescription)") }
             if review.issues.count >= 20 { review.issues.append("Further inspection stopped after 20 errors."); break }
         }
         review.fingerprint = hash.finalize().map { String(format: "%02x", $0) }.joined()
