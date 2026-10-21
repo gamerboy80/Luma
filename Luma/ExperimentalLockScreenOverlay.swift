@@ -9,6 +9,7 @@ import CryptoKit
 @MainActor final class ExperimentalLockScreenOverlay: ObservableObject {
     @Published private(set) var enabled = false
     @Published private(set) var status = "Live lock-screen overlay is off."
+    @Published private(set) var details = ""
     @Published private(set) var wallpaperID: UUID?
 
     private static let enabledKey = "luma.experimentalLockOverlay.enabled"
@@ -24,12 +25,15 @@ import CryptoKit
     private var shuttingDown = false
     private var activeWallpaper: Wallpaper?
     private var activeConfigurationIdentity: String?
+    private var sessionTask: Task<Void, Never>?
+    private var lastDiagnostic = ""
 
     init(library: LibraryStore, assets: @escaping () -> URL?) {
         self.library = library
         self.assets = assets
         enabled = UserDefaults.standard.bool(forKey: Self.enabledKey)
         wallpaperID = UUID(uuidString: UserDefaults.standard.string(forKey: Self.wallpaperKey) ?? "")
+        locked = Self.sessionLocked() ?? false
 
         let distributed = DistributedNotificationCenter.default()
         observe(Notification.Name("com.apple.screenIsLocked"), center: distributed) { [weak self] in self?.screenLocked() }
@@ -37,6 +41,7 @@ import CryptoKit
         observe(NSApplication.didChangeScreenParametersNotification, center: .default) { [weak self] in self?.rebuildForScreenChange() }
 
         let workspace = NSWorkspace.shared.notificationCenter
+        observe(NSWorkspace.sessionDidBecomeActiveNotification, center: workspace) { [weak self] in self?.screenUnlocked() }
         observe(NSWorkspace.willSleepNotification, center: workspace) { [weak self] in self?.sleeping = true; self?.updateVisibility() }
         observe(NSWorkspace.screensDidSleepNotification, center: workspace) { [weak self] in self?.sleeping = true; self?.updateVisibility() }
         observe(NSWorkspace.didWakeNotification, center: workspace) { [weak self] in self?.sleeping = false; self?.updateVisibility() }
@@ -163,6 +168,8 @@ import CryptoKit
     private func build(for wallpaper: Wallpaper) throws {
         let oldError = cleanupRuntime()
         if let oldError { throw LumaError("The previous overlay could not be removed: \(oldError)") }
+        guard !NSScreen.screens.isEmpty else { throw LumaError("No displays are available for the lock-screen overlay.") }
+        lastDiagnostic = ""
         let space = try SkyLightLockSpace()
         privateSpace = space
         var newSurfaces: [String: LockSceneSurface] = [:]
@@ -176,6 +183,8 @@ import CryptoKit
                 try space.attach(surface.window)
                 host.setPlaying(false)
                 host.failed = { [weak self] message in self?.rendererFailed(message) }
+                host.ready = { [weak self] in self?.updateDetails() }
+                host.diagnostic = { [weak self] message in self?.lastDiagnostic = message; self?.updateDetails() }
             }
             surfaces = newSurfaces
             activeWallpaper = wallpaper
@@ -198,11 +207,50 @@ import CryptoKit
         status = "The lock-screen scene renderer stopped: \(message) Use Prepare Static Fallback instead."
     }
 
-    private func screenLocked() { locked = true; updateVisibility() }
-    private func screenUnlocked() { locked = false; updateVisibility() }
+    private func screenLocked() {
+        locked = true
+        if enabled { status = "Lock detected; requesting the scene overlay. See renderer status below." }
+        updateVisibility()
+    }
+    private func screenUnlocked() {
+        locked = false
+        if enabled { status = "Experimental overlay is armed. The scene is paused until macOS locks." }
+        updateVisibility()
+    }
+
+    private static func sessionLocked() -> Bool? {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return nil }
+        // The unlocked dictionary can omit this key entirely.
+        return session["CGSSessionScreenIsLocked"] as? Bool ?? false
+    }
+
+    private func monitorSession() {
+        guard sessionTask == nil, enabled, !shuttingDown else { return }
+        // Notifications can be missed during login, wake or fast user switching.
+        // Read session state as a fallback; this never locks or unlocks the Mac.
+        sessionTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, self.enabled, !self.shuttingDown else { return }
+                if let current = Self.sessionLocked(), current != self.locked {
+                    if current { self.screenLocked() } else { self.screenUnlocked() }
+                }
+            }
+        }
+    }
+
+    private func updateDetails() {
+        guard !surfaces.isEmpty else { details = ""; return }
+        let ready = surfaces.values.filter { $0.host.didBecomeReady }.count
+        details = "Session: \(locked ? "locked" : "unlocked"); displays: \(sleeping ? "asleep" : "awake"); scene renderers ready: \(ready)/\(surfaces.count)."
+        if ready < surfaces.count { details += " Hidden WebKit content may finish loading only when the lock screen appears." }
+        if !lastDiagnostic.isEmpty { details += "\nRenderer: \(lastDiagnostic)" }
+    }
 
     private func updateVisibility() {
-        let visible = enabled && locked && !sleeping
+        monitorSession()
+        let visible = enabled && locked && !sleeping && !shuttingDown
+        privateSpace?.setVisible(visible)
         for surface in surfaces.values {
             surface.host.setPlaying(visible)
             if visible {
@@ -213,6 +261,7 @@ import CryptoKit
                 surface.window.orderOut(nil)
             }
         }
+        updateDetails()
     }
 
     private func rebuildForScreenChange() {
@@ -222,10 +271,12 @@ import CryptoKit
     }
 
     @discardableResult private func cleanupRuntime() -> String? {
+        sessionTask?.cancel(); sessionTask = nil
         for surface in surfaces.values { surface.stop() }
         surfaces.removeAll()
         activeWallpaper = nil
         activeConfigurationIdentity = nil
+        details = ""
         let result = privateSpace?.remove()
         if result == nil { privateSpace = nil }
         return result
@@ -239,15 +290,20 @@ import CryptoKit
     init(screen: NSScreen, host: SceneHost) {
         self.host = host
         window = LockSceneWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false, screen: screen)
+        window.setFrame(screen.frame, display: true)
         window.isReleasedWhenClosed = false
         window.isRestorable = false
         window.canBecomeVisibleWithoutLogin = true
+        window.canHide = false
+        window.hidesOnDeactivate = false
         window.ignoresMouseEvents = true
         window.backgroundColor = .black
         window.isOpaque = true
         window.hasShadow = false
         window.collectionBehavior = [.fullScreenAuxiliary, .stationary, .canJoinAllSpaces, .ignoresCycle]
-        window.level = .init(rawValue: Int(Int32.max - 2))
+        // This fills the display: use Atoll's background level, not the widget
+        // level that would cover macOS's clock and password controls.
+        window.level = .init(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
         window.alphaValue = 0
         window.contentView = host.webView
         host.webView.frame = window.contentView?.bounds ?? screen.frame
@@ -267,77 +323,4 @@ import CryptoKit
 @MainActor private final class LockSceneWindow: NSWindow {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
-}
-
-/// Thin, dynamically resolved wrapper around SkyLight. The overlay is disabled
-/// unless create/attach/hide/destroy operations are all available on this macOS.
-@MainActor private final class SkyLightLockSpace {
-    private typealias MainConnection = @convention(c) () -> Int32
-    private typealias SpaceCreate = @convention(c) (Int32, Int32, Int32) -> Int32
-    private typealias SpaceSetLevel = @convention(c) (Int32, Int32, Int32) -> Int32
-    private typealias SpaceListOperation = @convention(c) (Int32, CFArray) -> Int32
-    private typealias AttachWindows = @convention(c) (Int32, Int32, CFArray, Int32) -> Int32
-    private typealias SpaceDestroy = @convention(c) (Int32, Int32) -> Int32
-
-    private let handle: UnsafeMutableRawPointer
-    private let connection: Int32
-    private let id: Int32
-    private let hideSpaces: SpaceListOperation
-    private let attachWindows: AttachWindows
-    private let destroySpace: SpaceDestroy
-    private var removed = false
-
-    init() throws {
-        let paths = ["/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",
-                     "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight"]
-        guard let library = paths.lazy.compactMap({ dlopen($0, RTLD_NOW) }).first else {
-            throw LumaError("The private SkyLight framework is unavailable on this macOS version.")
-        }
-        handle = library
-        let main: MainConnection = try Self.resolve(handle: library, name: "SLSMainConnectionID", as: MainConnection.self)
-        let create: SpaceCreate = try Self.resolve(handle: library, name: "SLSSpaceCreate", as: SpaceCreate.self)
-        let setLevel: SpaceSetLevel = try Self.resolve(handle: library, name: "SLSSpaceSetAbsoluteLevel", as: SpaceSetLevel.self)
-        let showSpaces: SpaceListOperation = try Self.resolve(handle: library, name: "SLSShowSpaces", as: SpaceListOperation.self)
-        attachWindows = try Self.resolve(handle: library, name: "SLSSpaceAddWindowsAndRemoveFromSpaces", as: AttachWindows.self)
-        hideSpaces = try Self.resolve(handle: library, name: "SLSHideSpaces", as: SpaceListOperation.self)
-        destroySpace = try Self.resolve(handle: library, name: "SLSSpaceDestroy", as: SpaceDestroy.self)
-        connection = main()
-        guard connection > 0 else { throw LumaError("Luma has no usable WindowServer connection for the experimental overlay.") }
-        let space = create(connection, 1, 0)
-        guard space > 0 else { throw LumaError("SkyLight could not create a lock-screen space.") }
-        id = space
-        guard setLevel(connection, id, 400) == 0 else {
-            _ = destroySpace(connection, id)
-            removed = true
-            throw LumaError("SkyLight rejected the lock-screen space level.")
-        }
-        guard showSpaces(connection, [id] as CFArray) == 0 else {
-            _ = hideSpaces(connection, [id] as CFArray)
-            _ = destroySpace(connection, id)
-            removed = true
-            throw LumaError("SkyLight could not show the lock-screen space.")
-        }
-    }
-
-    func attach(_ window: NSWindow) throws {
-        guard !removed, window.windowNumber > 0 else { throw LumaError("The lock-screen window is no longer available.") }
-        guard attachWindows(connection, id, [window.windowNumber] as CFArray, 7) == 0 else {
-            throw LumaError("SkyLight could not attach a scene window to the lock-screen space.")
-        }
-    }
-
-    @discardableResult func remove() -> String? {
-        guard !removed else { return nil }
-        let hide = hideSpaces(connection, [id] as CFArray)
-        let destroy = destroySpace(connection, id)
-        guard destroy == 0 else { return "SLSpaceDestroy returned \(destroy) (hide returned \(hide))." }
-        removed = true
-        if hide != 0 { return "SLSHideSpaces returned \(hide); the space was destroyed." }
-        return nil
-    }
-
-    private static func resolve<T>(handle: UnsafeMutableRawPointer, name: String, as type: T.Type) throws -> T {
-        guard let address = dlsym(handle, name) else { throw LumaError("SkyLight is missing required symbol \(name).") }
-        return unsafeBitCast(address, to: type)
-    }
 }

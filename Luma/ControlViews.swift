@@ -123,6 +123,7 @@ struct LockScreenView:View {
                     Button("Disable Overlay",role:.destructive) { overlay.disable() }.disabled(!overlay.enabled)
                 }
                 Text(overlay.status).font(.caption).textSelection(.enabled)
+                if !overlay.details.isEmpty { Text(overlay.details).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
                 Text("This uses private SkyLight window and space APIs. macOS can change or block them, and WebKit/WebGL animation may pause or disappear while locked. Luma only enables it when the required APIs resolve; lock, sleep, wake, disable, and normal app exit each stop or resume the renderer and remove the temporary space.").font(.caption).foregroundStyle(.secondary)
                 Text("SceneScript keeps the existing Review Scripts approval and Run SceneScript toggle. A content change rebuilds the renderer, which rechecks the approved fingerprint before executing scripts.").font(.caption).foregroundStyle(.secondary)
             }

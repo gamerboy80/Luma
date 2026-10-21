@@ -13,6 +13,8 @@ import CryptoKit
         app.run()
     }
     @MainActor static func verify() async throws {
+        try LockOverlayTests.verify()
+        if CommandLine.arguments.contains("--live-lock-overlay") { try LockOverlayTests.verifyWindowServer() }
         let root=FileManager.default.temporaryDirectory.appendingPathComponent("LumaSceneTests-\(UUID())")
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
         defer {try? FileManager.default.removeItem(at:root)}
