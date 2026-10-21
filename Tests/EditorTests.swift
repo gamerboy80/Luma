@@ -2,7 +2,15 @@ import Foundation
 import AppKit
 
 @main struct EditorTests {
-    @MainActor static func main() throws {
+    @MainActor static func main() {
+        do { try run() }
+        catch {
+            FileHandle.standardError.write(Data("EDITOR TEST FAILED: \(String(reflecting: error))\n".utf8))
+            exit(1)
+        }
+    }
+
+    @MainActor private static func run() throws {
         var checks = 0
         func expect(_ value: @autoclosure () -> Bool, _ message: String) throws {
             checks += 1
@@ -72,6 +80,53 @@ import AppKit
         try expect(preservedExternalBytes == externalBytes, "external package edits are preserved")
         try roundTripPackage.encoded().write(to: packageURL, options: .atomic)
 
+        let metadataURL = projectFolder.appendingPathComponent("project.json")
+        let originalMetadata = try Data(contentsOf: metadataURL)
+        let metadataGuardDocument = try SceneProjectDocument(folder: projectFolder)
+        var externallyChangedMetadata = try JSONSerialization.jsonObject(with: originalMetadata) as! [String: Any]
+        externallyChangedMetadata["title"] = "Changed outside the editor"
+        externallyChangedMetadata["file"] = "replacement.pkg"
+        let externalMetadataBytes = try JSONSerialization.data(withJSONObject: externallyChangedMetadata, options: [.sortedKeys])
+        try externalMetadataBytes.write(to: metadataURL, options: .atomic)
+        try metadataGuardDocument.addTextLayer()
+        try rejects({ try metadataGuardDocument.save() }, "saving after external project metadata changes")
+        let metadataAfterConflict = try Data(contentsOf: metadataURL)
+        let packageAfterConflict = try Data(contentsOf: packageURL)
+        let expectedPackageAfterConflict = try roundTripPackage.encoded()
+        try expect(metadataAfterConflict == externalMetadataBytes,
+                   "a metadata conflict preserves the external project entry and title")
+        try expect(packageAfterConflict == expectedPackageAfterConflict,
+                   "a metadata conflict does not write the scene package")
+        try originalMetadata.write(to: metadataURL, options: .atomic)
+
+        let beforePartialSavePackage = try Data(contentsOf: packageURL)
+        let partialSaveDocument = try SceneProjectDocument(folder: projectFolder, metadataWriter: { _, _ in
+            throw LumaError("Injected metadata write failure.")
+        })
+        partialSaveDocument.title = "Partial save must roll back"
+        try partialSaveDocument.addTextLayer()
+        try rejects({ try partialSaveDocument.save() }, "failure of the second project save write")
+        let afterPartialSavePackage = try Data(contentsOf: packageURL)
+        let afterPartialSaveMetadata = try Data(contentsOf: metadataURL)
+        try expect(afterPartialSavePackage == beforePartialSavePackage && afterPartialSaveMetadata == originalMetadata,
+                   "a metadata write failure restores the original scene bytes and leaves project metadata intact")
+
+        let selfReferencingFolder = root.appendingPathComponent("SelfReferencingProject", isDirectory: true)
+        try FileManager.default.createDirectory(at: selfReferencingFolder, withIntermediateDirectories: false)
+        try JSONSerialization.data(withJSONObject: ["type":"scene", "title":"Invalid", "file":"project.json", "objects":[]] as [String: Any])
+            .write(to: selfReferencingFolder.appendingPathComponent("project.json"))
+        try rejects({ _ = try SceneProjectDocument(folder: selfReferencingFolder) }, "a scene entry that aliases project.json")
+
+        // A rename must leave both the index and project metadata unchanged if
+        // the project folder cannot accept its atomic scene-file replacement.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: projectFolder.path)
+        try rejects({ try store.rename(project.id, to: "Failed Rename") }, "rename whose project write fails")
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: projectFolder.path)
+        let titleAfterFailedRename = try JSONSerialization.jsonObject(with: Data(contentsOf: metadataURL)) as! [String: Any]
+        try expect(store.projects.first(where: { $0.id == project.id })?.title == "Round Trip"
+                   && titleAfterFailedRename["title"] as? String == "Round Trip",
+                   "a failed rename rolls back both the editor index and project metadata")
+
         var duplicate = try store.duplicate(project.id)
         try expect(duplicate.title == "Round Trip Copy", "duplicate project receives a new title")
         try expect(!duplicate.scriptsApproved && !duplicate.scriptsEnabled, "duplicate does not inherit script approval")
@@ -106,6 +161,7 @@ import AppKit
         let unsafeRoot = root.appendingPathComponent("unsafe-root")
         try FileManager.default.createSymbolicLink(at: unsafeRoot, withDestinationURL: projectFolder)
         try rejects({ _ = try store.importProject(unsafeRoot) }, "symbolic-link project root")
+        try rejects({ _ = try Safety.child("scene.pkg", under: unsafeRoot) }, "resolving a file beneath a symbolic-link root")
         try rejects({ _ = try store.export(project.id, to: projectFolder) }, "exporting a project into itself")
         let beforeInvalidLayer = document.objects[0]
         try rejects({ try document.replaceLayer(at: 0, with: ["id": ["invalid": true]]) }, "invalid layer ID")
@@ -125,16 +181,70 @@ import AppKit
         try FileManager.default.removeItem(at: indexURL)
         try originalIndex.write(to: indexURL)
 
+        // An index edited by another process must not be overwritten by an
+        // already-open store or newly trusted as ownership during Clear Data.
+        var externalIndex = try JSONSerialization.jsonObject(with: originalIndex) as! [String: Any]
+        var externalProjects = externalIndex["projects"] as! [[String: Any]]
+        externalProjects[0]["title"] = "Changed outside Luma"
+        externalIndex["projects"] = externalProjects
+        let externalIndexBytes = try JSONSerialization.data(withJSONObject: externalIndex, options: [.sortedKeys])
+        let originalProjectMetadata = try Data(contentsOf: projectFolder.appendingPathComponent("project.json"))
+        try externalIndexBytes.write(to: indexURL, options: .atomic)
+        try rejects({ try store.rename(project.id, to: "Overwrite attempt") }, "renaming with an externally edited project index")
+        try rejects({ _ = try store.create(title: "Stale store") }, "creating with an externally edited project index")
+        try expect(store.clearDataProjectCount == nil, "clear review refuses a project index changed outside the loaded store")
+        try rejects({ try store.clearManagedProjects() }, "clearing with an externally edited project index")
+        let preservedExternalIndex = try Data(contentsOf: indexURL)
+        let preservedProjectMetadata = try Data(contentsOf: projectFolder.appendingPathComponent("project.json"))
+        try expect(preservedExternalIndex == externalIndexBytes && preservedProjectMetadata == originalProjectMetadata,
+                   "stale editor operations preserve external index data and project files")
+        try originalIndex.write(to: indexURL, options: .atomic)
+
         let corruptBytes = Data("{invalid json".utf8)
         try corruptBytes.write(to: indexURL)
         let corruptStore = EditorProjectStore(library: library)
         try rejects({ _ = try corruptStore.create() }, "creating over a corrupt project index")
+        try expect(corruptStore.clearDataProjectCount == nil, "clear review cannot claim ownership from a corrupt index")
+        try rejects({ try corruptStore.validateManagedProjectsForClear() }, "preflighting Clear Data with a corrupt index")
+        try rejects({ try corruptStore.clearManagedProjects() }, "clearing with a corrupt project index")
         let preservedIndex = try Data(contentsOf: indexURL)
-        try expect(preservedIndex == corruptBytes, "corrupt project index is preserved")
+        try expect(preservedIndex == corruptBytes, "corrupt project index is preserved during edit and cleanup")
         try originalIndex.write(to: indexURL)
         let clearingStore = EditorProjectStore(library: library)
         try clearingStore.clearManagedProjects()
         try rejects({ _ = try clearingStore.create() }, "editing after Clear Data")
+
+        // A valid index is still sufficient ownership evidence for retrying
+        // Clear Data after a prior run removed one project folder but stopped
+        // before deleting the index. Unknown, unindexed entries stay intact.
+        let retryRoot = root.appendingPathComponent("ClearRetryLibrary", isDirectory: true)
+        let retryLibrary = LibraryStore(root: retryRoot)
+        let retryStore = EditorProjectStore(library: retryLibrary)
+        let retryProject = try retryStore.create(title: "Partial Cleanup")
+        let malformedProject = try retryStore.create(title: "Malformed Document")
+        try Data("{invalid json".utf8).write(to: retryStore.folder(for: malformedProject).appendingPathComponent("project.json"), options: .atomic)
+        let retryBase = retryRoot.appendingPathComponent("EditorProjects", isDirectory: true)
+        let unknown = retryBase.appendingPathComponent("unindexed-user-folder", isDirectory: true)
+        try FileManager.default.createDirectory(at: unknown, withIntermediateDirectories: false)
+        try FileManager.default.removeItem(at: retryStore.folder(for: retryProject))
+        let recoveryStore = EditorProjectStore(library: LibraryStore(root: retryRoot))
+        try expect(recoveryStore.projects.isEmpty, "missing indexed folder prevents normal project editing")
+        try expect(recoveryStore.clearDataProjectCount == 2, "clear review counts valid indexed ownership despite missing or malformed project content")
+        try recoveryStore.validateManagedProjectsForClear()
+        try recoveryStore.clearManagedProjects()
+        try expect(!FileManager.default.fileExists(atPath: retryBase.appendingPathComponent("projects.json").path), "Clear Data retry removes validated stale ownership index")
+        try expect(!FileManager.default.fileExists(atPath: retryStore.folder(for: malformedProject).path), "Clear Data retry removes malformed but safely indexed project data")
+        try expect(FileManager.default.fileExists(atPath: unknown.path), "Clear Data retry preserves unindexed project entries")
+
+        let historyFolder = root.appendingPathComponent("HistoryBudget", isDirectory: true)
+        try FileManager.default.createDirectory(at: historyFolder, withIntermediateDirectories: false)
+        let largeLayer: [String: Any] = ["id": 1, "name": "Large fixture", "visible": true, "retained": String(repeating: "x", count: 22 * 1024 * 1024)]
+        try JSONSerialization.data(withJSONObject: ["objects": [largeLayer]] as [String: Any]).write(to: historyFolder.appendingPathComponent("scene.json"))
+        try JSONSerialization.data(withJSONObject: ["title": "History Budget", "type": "scene", "file": "scene.json"] as [String: Any]).write(to: historyFolder.appendingPathComponent("project.json"))
+        let historyDocument = try SceneProjectDocument(folder: historyFolder)
+        for index in 0..<6 { try historyDocument.setVisibility(at: 0, visible: index.isMultiple(of: 2)) }
+        try expect(historyDocument.canUndo && historyDocument.retainedHistoryBytes <= 128 * 1024 * 1024,
+                   "large editor undo snapshots stay within the 128 MiB retained-history budget")
         print("PASS: \(checks) editor lifecycle, package round-trip, editing, history, and path safety checks")
     }
 }

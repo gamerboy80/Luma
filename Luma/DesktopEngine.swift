@@ -41,6 +41,11 @@ extension NSScreen {
         view.layer?.masksToBounds = true; window.contentView = view
     }
     func setPlaying(_ playing: Bool) { if playing { player?.playImmediately(atRate: Float(configuration.speed)) } else { player?.pause() }; scene?.setPlaying(playing) }
+    func matches(_ candidate: Wallpaper) -> Bool {
+        wallpaper.id == candidate.id && wallpaper.kind == candidate.kind && wallpaper.folder == candidate.folder && wallpaper.entry == candidate.entry
+            && wallpaper.propertiesJSON == candidate.propertiesJSON && wallpaper.runsSceneScript == candidate.runsSceneScript
+            && wallpaper.scriptApprovalFingerprint == candidate.scriptApprovalFingerprint
+    }
     func updateGeometry(screen: NSScreen, preferences: AppPreferences) {
         window.setFrame(screen.frame, display: true)
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -69,6 +74,48 @@ struct DesktopStillReceipt: Codable {
     var ownedURLs: Set<URL> { Set((generatedURLs ?? []) + [installedURL]) }
 }
 
+enum DesktopStillOwnership {
+    static func validate(_ receipts: [String: DesktopStillReceipt], directory: URL,
+                         fileManager fm: FileManager = .default) throws {
+        guard receipts.count <= 128 else { throw LumaError("The desktop-still ownership record contains too many displays.") }
+        try Safety.validateDirectoryIfPresent(directory)
+        for (key, receipt) in receipts {
+            guard !key.isEmpty, key.utf8.count <= 256, key == receipt.screenID else {
+                throw LumaError("The desktop-still ownership record has an invalid display identifier.")
+            }
+            let generatedURLs = receipt.generatedURLs ?? []
+            guard generatedURLs.count <= 128,
+                  Set(generatedURLs).count == generatedURLs.count,
+                  generatedURLs.isEmpty || generatedURLs.contains(receipt.installedURL) else {
+                throw LumaError("The desktop-still ownership record has an inconsistent generated-file list.")
+            }
+            let ownedURLs = Array(receipt.ownedURLs)
+            guard ownedURLs.count <= 128 else {
+                throw LumaError("The desktop-still ownership record has an invalid generated-file list.")
+            }
+            for url in ownedURLs {
+                guard url.isFileURL,
+                      url.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL,
+                      let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
+                      url.lastPathComponent == "\(id.uuidString).png" else {
+                    throw LumaError("The desktop-still ownership record points outside Luma's generated wallpaper folder.")
+                }
+                let attributes: [FileAttributeKey: Any]?
+                do { attributes = try fm.attributesOfItem(atPath: url.path) }
+                catch let error as CocoaError where error.code == .fileReadNoSuchFile { attributes = nil }
+                catch { throw LumaError("Could not inspect generated desktop still \(url.path): \(error.localizedDescription)") }
+                if let attributes, attributes[.type] as? FileAttributeType != .typeRegular {
+                    throw LumaError("Generated desktop still \(url.path) is not a regular file. It was left untouched.")
+                }
+            }
+            if let originalURL = receipt.originalURL,
+               !originalURL.isFileURL || originalURL.path.isEmpty {
+                throw LumaError("The desktop-still ownership record has an invalid previous wallpaper path.")
+            }
+        }
+    }
+}
+
 @MainActor final class DesktopEngine: ObservableObject {
     @Published var screens: [NSScreen] = NSScreen.screens
     @Published var pauseReasons: [String: [String]] = [:]
@@ -76,7 +123,7 @@ struct DesktopStillReceipt: Codable {
     @Published var diagnostics: [String] = []
     let library: LibraryStore
     private(set) var surfaces: [String: DesktopSurface] = [:]
-    private var pending: [String: DesktopSurface] = [:]
+    private(set) var pending: [String: DesktopSurface] = [:]
     private var retryCounts: [String: Int] = [:]
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var timer: Timer?
@@ -88,13 +135,18 @@ struct DesktopStillReceipt: Codable {
     private var lastPlaylist = Date()
     private var lastScheduledID: UUID?
     private var stillReceipts: [String: DesktopStillReceipt] = [:]
+    private var persistedStillReceiptData: Data?
+    private var stillReceiptError: String?
     private var stillTasks: [String: Task<Void, Never>] = [:]
     private var clearingData = false
     var assetsURL: URL?
     init(library: LibraryStore) {
         self.library = library
-        let receiptURL = library.root.appendingPathComponent("DesktopStills/ownership.json")
-        if let data = try? Data(contentsOf: receiptURL), let receipts = try? JSONDecoder().decode([String: DesktopStillReceipt].self, from: data) { stillReceipts = receipts }
+        do { try loadStillReceipts() }
+        catch {
+            stillReceiptError = "Luma could not verify its desktop wallpaper ownership record. Clear Data will preserve it: \(error.localizedDescription)"
+            log(stillReceiptError!)
+        }
         library.onChange = { [weak self] in self?.reconcile() }
         observe(NSApplication.didChangeScreenParametersNotification, center: .default) { [weak self] in self?.screens = NSScreen.screens; self?.reconcile() }
         let workspace = NSWorkspace.shared.notificationCenter
@@ -148,10 +200,14 @@ struct DesktopStillReceipt: Codable {
                 if let active = surfaces[id], active.wallpaper.id == wallpaperID, active.wallpaper.runsSceneScript { surfaces.removeValue(forKey: id)?.stop() }
                 if let waiting = pending[id], waiting.wallpaper.id == wallpaperID, waiting.wallpaper.runsSceneScript { pending.removeValue(forKey: id)?.stop() }
             }
-            if let active = surfaces[id], active.wallpaper.id == wallpaperID, active.wallpaper.propertiesJSON == wallpaper.propertiesJSON, active.wallpaper.runsSceneScript == wallpaper.runsSceneScript {
+            if let active = surfaces[id], active.matches(wallpaper) {
                 active.configuration = config; active.updateGeometry(screen: screen, preferences: library.state.preferences)
-                if let waiting = pending[id], waiting.wallpaper.id != wallpaperID { pending.removeValue(forKey: id)?.stop() }
-            } else if pending[id]?.wallpaper.id != wallpaperID || pending[id]?.wallpaper.propertiesJSON != wallpaper.propertiesJSON || pending[id]?.wallpaper.runsSceneScript != wallpaper.runsSceneScript { load(wallpaper, on: screen, configuration: config) }
+                if let waiting = pending[id], !waiting.matches(wallpaper) { pending.removeValue(forKey: id)?.stop() }
+            } else if pending[id]?.matches(wallpaper) != true { load(wallpaper, on: screen, configuration: config) }
+            if let waiting = pending[id] {
+                waiting.configuration = config
+                waiting.updateGeometry(screen: screen, preferences: library.state.preferences)
+            }
         }
         updatePolicy()
     }
@@ -209,6 +265,7 @@ struct DesktopStillReceipt: Codable {
     func retry(_ id: String) {
         guard let screen = screens.first(where: { $0.persistentID == id }), let config = library.state.displays[id], let item = library.state.wallpapers.first(where: { $0.id == config.wallpaperID }) else { return }
         load(item, on: screen, configuration: config)
+        updatePolicy()
     }
     private func wake() {
         sleeping = false
@@ -238,6 +295,7 @@ struct DesktopStillReceipt: Codable {
             }) { holds.insert("Fullscreen app") }
             let policy = PlaybackPolicy(userPaused: prefs.paused || config.paused, holds: holds)
             surfaces[id]?.setPlaying(policy.shouldPlay)
+            pending[id]?.setPlaying(policy.shouldPlay)
             if prefs.paused || config.paused { holds.insert("Paused by you") }
             reasons[id] = holds.sorted()
         }
@@ -356,6 +414,36 @@ struct DesktopStillReceipt: Codable {
             "Restore display \(receipt.screenID) to \(receipt.originalURL?.path ?? "the macOS default desktop image")."
         }
     }
+    var clearDataPreflightError: String? {
+        do { try validateForClearData(); return nil }
+        catch { return error.localizedDescription }
+    }
+    func validateForClearData() throws {
+        if let stillReceiptError { throw LumaError(stillReceiptError) }
+        let directory = try Safety.child("DesktopStills", under: library.root)
+        let receiptURL = try Safety.child("DesktopStills/ownership.json", under: library.root)
+        try Safety.validateDirectoryIfPresent(directory)
+        let attributes: [FileAttributeKey: Any]?
+        do { attributes = try FileManager.default.attributesOfItem(atPath: receiptURL.path) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { attributes = nil }
+        catch {
+            throw LumaError("Could not inspect Luma's desktop wallpaper ownership record: \(error.localizedDescription)")
+        }
+        if let attributes, attributes[.type] as? FileAttributeType != .typeRegular {
+            throw LumaError("Luma's desktop wallpaper ownership record is not a regular file. It was left untouched.")
+        }
+        let current: Data?
+        do { current = try attributes == nil ? nil : Data(contentsOf: receiptURL) }
+        catch { throw LumaError("Could not read Luma's desktop wallpaper ownership record: \(error.localizedDescription)") }
+        guard (current?.count ?? 0) <= 4 * 1024 * 1024 else {
+            throw LumaError("Luma's desktop wallpaper ownership record exceeds the 4 MiB safety limit.")
+        }
+        guard current == persistedStillReceiptData else {
+            throw LumaError("Luma's desktop wallpaper ownership record changed outside the app. Reopen Luma before clearing data; the record and generated files were preserved.")
+        }
+        try DesktopStillOwnership.validate(stillReceipts, directory: directory)
+        _ = try validatedRestorationTargets()
+    }
     func beginClearData() {
         guard !clearingData else { return }
         clearingData = true
@@ -371,6 +459,7 @@ struct DesktopStillReceipt: Codable {
         reconcile()
     }
     func prepareForClearData() async throws {
+        try validateForClearData()
         beginClearData()
         let inFlightStillTasks = Array(stillTasks.values)
         inFlightStillTasks.forEach { $0.cancel() }
@@ -381,15 +470,10 @@ struct DesktopStillReceipt: Codable {
         for surface in Array(surfaces.values) + Array(pending.values) { surface.stop() }
         surfaces.removeAll(); pending.removeAll()
         for task in inFlightStillTasks { await task.value }
-        let stillsDirectory = library.root.appendingPathComponent("DesktopStills", isDirectory: true)
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: stillsDirectory.path),
-           attributes[.type] as? FileAttributeType != .typeDirectory {
-            throw LumaError("\(stillsDirectory.path) is not a Luma-managed directory. It was left untouched.")
-        }
-        for (id, receipt) in Array(stillReceipts) {
-            guard let screen = screens.first(where: { $0.persistentID == id }) else {
-                throw LumaError("Connect display \(id) so Luma can restore its previous desktop image before clearing data.")
-            }
+        try validateForClearData()
+        let stillsDirectory = try Safety.child("DesktopStills", under: library.root)
+        let restorationTargets = try validatedRestorationTargets()
+        for (screen, receipt) in restorationTargets {
             if let current = NSWorkspace.shared.desktopImageURL(for: screen), receipt.ownedURLs.contains(current) {
                 guard let original = receipt.originalURL else { throw LumaError("The previous desktop image could not be identified. Luma's backup was retained.") }
                 try NSWorkspace.shared.setDesktopImageURL(original, for: screen, options: [:])
@@ -408,6 +492,25 @@ struct DesktopStillReceipt: Codable {
         }
         stillReceipts.removeAll()
     }
+    private func validatedRestorationTargets() throws -> [(NSScreen, DesktopStillReceipt)] {
+        try stillReceipts.sorted { $0.key < $1.key }.map { id, receipt in
+            guard let screen = screens.first(where: { $0.persistentID == id }) else {
+                throw LumaError("Connect display \(id) so Luma can restore its previous desktop image before clearing data.")
+            }
+            if let current = NSWorkspace.shared.desktopImageURL(for: screen), receipt.ownedURLs.contains(current) {
+                guard let original = receipt.originalURL else {
+                    throw LumaError("The previous desktop image for display \(id) could not be identified. Luma's backup was retained.")
+                }
+                let attributes: [FileAttributeKey: Any]
+                do { attributes = try FileManager.default.attributesOfItem(atPath: original.path) }
+                catch { throw LumaError("The previous desktop image for display \(id) cannot be restored: \(error.localizedDescription)") }
+                guard attributes[.type] as? FileAttributeType == .typeRegular else {
+                    throw LumaError("The previous desktop image for display \(id) is not a regular file. Luma's backup was retained.")
+                }
+            }
+            return (screen, receipt)
+        }
+    }
     private func removeOwnedStillFile(_ url: URL, directory: URL) throws {
         let standardizedDirectory = directory.standardizedFileURL
         guard url.deletingLastPathComponent().standardizedFileURL == standardizedDirectory,
@@ -417,7 +520,10 @@ struct DesktopStillReceipt: Codable {
     }
     private func removeManagedFileIfPresent(_ url: URL) throws {
         let fm = FileManager.default
-        guard let attributes = try? fm.attributesOfItem(atPath: url.path) else { return }
+        let attributes: [FileAttributeKey: Any]
+        do { attributes = try fm.attributesOfItem(atPath: url.path) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return }
+        catch { throw LumaError("Could not inspect generated desktop file \(url.path): \(error.localizedDescription)") }
         guard attributes[.type] as? FileAttributeType == .typeRegular else {
             throw LumaError("\(url.path) is not a regular Luma-generated file. It was left untouched.")
         }
@@ -427,7 +533,39 @@ struct DesktopStillReceipt: Codable {
         let dir = try Safety.child("DesktopStills", under: library.root)
         try Safety.validateDirectoryIfPresent(dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try JSONEncoder().encode(stillReceipts).write(to: Safety.child("ownership.json", under: dir), options: .atomic)
+        let url = try Safety.child("ownership.json", under: dir)
+        let current: Data?
+        do { current = try Data(contentsOf: url) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { current = nil }
+        guard current == persistedStillReceiptData else {
+            let message = "Luma's desktop wallpaper ownership record changed outside the app. The newer record was preserved."
+            stillReceiptError = message
+            throw LumaError(message)
+        }
+        try DesktopStillOwnership.validate(stillReceipts, directory: dir)
+        let data = try JSONEncoder().encode(stillReceipts)
+        try data.write(to: url, options: .atomic)
+        persistedStillReceiptData = data
+    }
+    private func loadStillReceipts() throws {
+        let directory = try Safety.child("DesktopStills", under: library.root)
+        let receiptURL = try Safety.child("DesktopStills/ownership.json", under: library.root)
+        try Safety.validateDirectoryIfPresent(directory)
+        let attributes: [FileAttributeKey: Any]?
+        do { attributes = try FileManager.default.attributesOfItem(atPath: receiptURL.path) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { attributes = nil }
+        guard let attributes else { return }
+        guard attributes[.type] as? FileAttributeType == .typeRegular else {
+            throw LumaError("Luma's desktop wallpaper ownership record is not a regular file.")
+        }
+        guard (attributes[.size] as? NSNumber)?.intValue ?? 0 <= 4 * 1024 * 1024 else {
+            throw LumaError("Luma's desktop wallpaper ownership record exceeds the 4 MiB safety limit.")
+        }
+        let data = try Data(contentsOf: receiptURL)
+        let receipts = try JSONDecoder().decode([String: DesktopStillReceipt].self, from: data)
+        try DesktopStillOwnership.validate(receipts, directory: directory)
+        stillReceipts = receipts
+        persistedStillReceiptData = data
     }
     func log(_ message: String) { diagnostics.append("\(Date().formatted(date: .omitted, time: .standard))  \(message)"); if diagnostics.count > 100 { diagnostics.removeFirst(diagnostics.count - 100) } }
     func shutdown() {

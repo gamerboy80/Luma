@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import Security
 
 struct WorkshopItem: Identifiable, Decodable {
@@ -25,30 +26,50 @@ struct WorkshopTag: Decodable { var tag: String }
     @Published var page = 1
     @Published var total = 0
     private var task: Task<Void, Never>?
+    private var requestGeneration = UUID()
+    private var completedQuery: String?
+    private var completedType: String?
+    var canLoadMore: Bool {
+        !searching && !items.isEmpty && items.count < total && query.trimmingCharacters(in: .whitespacesAndNewlines) == completedQuery && type == completedType
+    }
     func search(nextPage: Bool = false) {
         task?.cancel()
-        page = nextPage ? page + 1 : 1
-        let requestedPage = page
+        let generation = UUID(); requestGeneration = generation
+        let requestedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedType = type
+        let requestedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let appending = nextPage && requestedQuery == completedQuery && requestedType == completedType && Safety.workshopID(requestedQuery) == nil
+        let requestedPage = appending ? page + 1 : 1
+        searching = true; error = nil
         task = Task {
-            searching = true; error = nil; defer { searching = false }
+            defer {
+                if requestGeneration == generation { searching = false; task = nil }
+            }
             do {
                 let result: [WorkshopItem]
-                if let id = Safety.workshopID(query) { result = try await details(id: id); total = result.count }
+                let resultTotal: Int
+                if let id = Safety.workshopID(requestedQuery) { result = try await details(id: id); resultTotal = result.count }
                 else {
-                    guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LumaError("Enter a Steam Web API key for text search, or paste a Workshop link / item ID. You can also browse Workshop in Steam.") }
+                    guard !requestedAPIKey.isEmpty else { throw LumaError("Enter a Steam Web API key for text search, or paste a Workshop link / item ID. You can also browse Workshop in Steam.") }
                     var url = URLComponents(string: "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/")!
-                    var fields = ["key":apiKey,"query_type":"0","page":String(requestedPage),"numperpage":"30","appid":"431960","search_text":query,"return_details":"true","return_tags":"true"]
-                    if type != "All" { fields["requiredtags[0]"] = type; fields["match_all_tags"] = "true" }
+                    var fields = ["key":requestedAPIKey,"query_type":"0","page":String(requestedPage),"numperpage":"30","appid":"431960","search_text":requestedQuery,"return_details":"true","return_tags":"true"]
+                    if requestedType != "All" { fields["requiredtags[0]"] = requestedType; fields["match_all_tags"] = "true" }
                     url.queryItems = fields.map { URLQueryItem(name: $0.key, value: $0.value) }
                     struct Envelope: Decodable { var response: Response; struct Response: Decodable { var total: Int?; var publishedfiledetails: [WorkshopItem]? } }
                     let (data, response) = try await URLSession.shared.data(from: url.url!)
                     try Self.validate(response)
                     let decoded = try JSONDecoder().decode(Envelope.self, from: data)
-                    total = decoded.response.total ?? 0; result = decoded.response.publishedfiledetails ?? []
+                    resultTotal = decoded.response.total ?? 0; result = decoded.response.publishedfiledetails ?? []
                 }
                 try Task.checkCancellation()
-                if nextPage { items += result } else { items = result }
-            } catch is CancellationError {} catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+                guard requestGeneration == generation else { return }
+                if appending {
+                    var seen = Set(items.map(\.id))
+                    items.append(contentsOf: result.filter { seen.insert($0.id).inserted })
+                } else { items = result }
+                total = resultTotal; page = requestedPage
+                completedQuery = requestedQuery; completedType = requestedType
+            } catch is CancellationError {} catch { if requestGeneration == generation { self.error = error.localizedDescription } }
         }
     }
     func details(id: String) async throws -> [WorkshopItem] {
@@ -72,7 +93,7 @@ struct WorkshopTag: Decodable { var tag: String }
         if let result = url.url { NSWorkspace.shared.open(result) }
     }
     func resetForClearData() {
-        task?.cancel(); task = nil; searching = false; error = nil; apiKey = ""; query = ""; type = "All"; page = 1; total = 0; items = []
+        task?.cancel(); task = nil; requestGeneration = UUID(); searching = false; error = nil; apiKey = ""; query = ""; type = "All"; page = 1; total = 0; items = []; completedQuery = nil; completedType = nil
     }
 }
 
@@ -139,24 +160,41 @@ private final class SteamOutputBuffer: @unchecked Sendable {
         }
         return environment
     }
-    private static func isInsideExistingSteamLibrary(_ file: URL) -> Bool {
+    static func temporaryDownloadRetentionReason(at file: URL, steamRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Steam", isDirectory: true)) -> String? {
         let fm = FileManager.default
-        let steamRoot = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Steam", isDirectory: true)
         var roots = [steamRoot.standardizedFileURL.resolvingSymlinksInPath()]
         let vdf = steamRoot.appendingPathComponent("steamapps/libraryfolders.vdf")
-        if let text = try? String(contentsOf: vdf, encoding: .utf8),
-           let regex = try? NSRegularExpression(pattern: #""((?:\\.|[^"\\])*)"\s*"((?:\\.|[^"\\])*)""#) {
+        var vdfMetadata = stat()
+        let vdfResult = vdf.path.withCString { Darwin.lstat($0, &vdfMetadata) }
+        if vdfResult == 0 {
+            guard vdfMetadata.st_mode & mode_t(S_IFMT) != mode_t(S_IFLNK) else { return "the existing Steam library list is a symbolic link and could not be verified safely" }
+            guard let attributes = try? fm.attributesOfItem(atPath: vdf.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  let size = attributes[.size] as? NSNumber, size.intValue <= 16 * 1024 * 1024,
+                  let text = try? String(contentsOf: vdf, encoding: .utf8),
+                  let regex = try? NSRegularExpression(pattern: #""((?:\\.|[^"\\])*)"\s*"((?:\\.|[^"\\])*)""#) else {
+                return "the existing Steam library list could not be read safely"
+            }
             let nsText = text as NSString
-            for match in regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)) where match.numberOfRanges == 3 {
+            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+            var foundLibraryEntry = false
+            for match in matches where match.numberOfRanges == 3 {
                 let key = nsText.substring(with: match.range(at: 1))
                 guard key == "path" || Int(key) != nil else { continue }
+                foundLibraryEntry = true
                 let path = nsText.substring(with: match.range(at: 2)).replacingOccurrences(of: "\\\\", with: "\\")
-                guard path.hasPrefix("/") else { continue }
+                guard path.hasPrefix("/") else { return "the existing Steam library list contains an invalid folder path" }
                 roots.append(URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath())
             }
+            guard foundLibraryEntry else { return "the existing Steam library list could not be verified" }
+        } else if Darwin.errno != ENOENT && Darwin.errno != ENOTDIR {
+            return "the existing Steam library list could not be inspected"
         }
         let target = file.standardizedFileURL.resolvingSymlinksInPath().path
-        return roots.contains { root in target == root.path || target.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/") }
+        if roots.contains(where: { root in target == root.path || target.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/") }) {
+            return "the download folder is inside an existing Steam library"
+        }
+        return nil
     }
     func checkInstallation() {
         guard !running, let folder = folderURL else { status = "Choose a SteamCMD folder first."; return }
@@ -195,7 +233,6 @@ private final class SteamOutputBuffer: @unchecked Sendable {
         }
         p.terminationHandler = { [weak self] completed in
             stdout.fileHandleForReading.readabilityHandler = nil
-            captured.append(stdout.fileHandleForReading.readDataToEndOfFile())
             Task { @MainActor [weak self] in
                 guard let self, self.process === completed else { return }
                 self.console = String((prefix + captured.snapshot()).suffix(60000))
@@ -226,7 +263,18 @@ private final class SteamOutputBuffer: @unchecked Sendable {
         do { try input?.fileHandleForWriting.write(contentsOf: Data((text + "\n").utf8)) }
         catch { status = "SteamCMD is no longer accepting input." }
     }
-    func cancel() { guard running else { return }; cancellationRequested = true; process?.terminate(); status = "Cancelling…" }
+    func cancel() {
+        guard running, let process else { return }
+        cancellationRequested = true
+        process.terminate()
+        status = "Cancelling…"
+        let pid = process.processIdentifier
+        Task { @MainActor [weak self, weak process] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, let process, self.process === process, self.cancellationRequested, process.isRunning else { return }
+            _ = Darwin.kill(pid, SIGKILL)
+        }
+    }
     func resetConfiguration() {
         folderURL = nil; username = ""; currentItemID = nil
         status = "Not connected"; console = "Select your SteamCMD folder to get started. Steam enforces Wallpaper Engine ownership."
@@ -273,8 +321,8 @@ private final class SteamOutputBuffer: @unchecked Sendable {
                 status = "Imported successfully, but the temporary SteamCMD download path changed. Files were retained at \(result.path)."
                 release(); return
             }
-            guard !Self.isInsideExistingSteamLibrary(permitted) else {
-                status = "Imported successfully. The downloaded copy remains at \(permitted.path) because it is inside an existing Steam library."
+            if let reason = Self.temporaryDownloadRetentionReason(at: permitted) {
+                status = "Imported successfully. The downloaded copy remains at \(permitted.path) because \(reason)."
                 release(); return
             }
             do {
@@ -316,6 +364,8 @@ private final class SteamOutputBuffer: @unchecked Sendable {
 
 enum Bookmark {
     static let legacyPreferencesURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Containers/dev.patrick.Luma/Data/Library/Preferences/dev.patrick.Luma.plist")
+    private static var clearPreflightComplete = false
+    private static var legacyBytesAtClearPreflight: Data?
     static func savedData(forKey key: String) -> Data? {
         if let data = UserDefaults.standard.data(forKey: key) { return data }
         guard ["steamcmd-folder", "engine-assets", "native-root"].contains(key) else { return nil }
@@ -325,15 +375,35 @@ enum Bookmark {
         return data
     }
     static func clearSavedBookmarks() throws {
+        if !clearPreflightComplete { try preflightSavedBookmarksForClear() }
+        defer { clearPreflightComplete = false; legacyBytesAtClearPreflight = nil }
         let keys = ["steamcmd-folder", "engine-assets", "native-root"]
-        if FileManager.default.fileExists(atPath: legacyPreferencesURL.path) {
-            let data = try Data(contentsOf: legacyPreferencesURL)
+        if let expected = legacyBytesAtClearPreflight {
+            let safeURL = try Safety.child("Library/Containers/dev.patrick.Luma/Data/Library/Preferences/dev.patrick.Luma.plist", under: FileManager.default.homeDirectoryForCurrentUser)
+            let data = try Data(contentsOf: safeURL)
+            guard data == expected else { throw LumaError("The old Luma preferences changed during Clear Data preflight. No saved bookmarks were removed; review the cleanup again.") }
             guard var values = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { throw LumaError("The old Luma preferences file could not be read, so its saved bookmarks were left untouched.") }
             keys.forEach { values.removeValue(forKey: $0) }
             let updated = try PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
-            try updated.write(to: legacyPreferencesURL, options: .atomic)
+            try updated.write(to: safeURL, options: .atomic)
         }
         keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
+    }
+    static func preflightSavedBookmarksForClear() throws {
+        clearPreflightComplete = false; legacyBytesAtClearPreflight = nil
+        let safeURL = try Safety.child("Library/Containers/dev.patrick.Luma/Data/Library/Preferences/dev.patrick.Luma.plist", under: FileManager.default.homeDirectoryForCurrentUser)
+        guard FileManager.default.fileExists(atPath: safeURL.path) else { clearPreflightComplete = true; return }
+        let attributes = try FileManager.default.attributesOfItem(atPath: safeURL.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber, size.intValue <= 16 * 1024 * 1024 else {
+            throw LumaError("The old Luma preferences file is not a safe regular file. Clear Data stopped before changing app or system state.")
+        }
+        let data = try Data(contentsOf: safeURL)
+        guard try PropertyListSerialization.propertyList(from: data, format: nil) is [String: Any] else {
+            throw LumaError("The old Luma preferences file could not be read. Clear Data stopped before changing app or system state.")
+        }
+        legacyBytesAtClearPreflight = data
+        clearPreflightComplete = true
     }
     static func create(_ url: URL) throws -> Data { try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) }
     static func resolve(_ data: Data) throws -> URL { var stale = false; return try URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale) }

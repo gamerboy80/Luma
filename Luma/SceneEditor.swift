@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import Foundation
 
 struct EditorProject: Identifiable, Codable, Hashable {
@@ -24,6 +25,7 @@ struct EditorProject: Identifiable, Codable, Hashable {
     private let base: URL
     private let indexURL: URL
     private var loadError: String?
+    private var persistedIndexData: Data?
     let library: LibraryStore
 
     init(library: LibraryStore) {
@@ -37,12 +39,8 @@ struct EditorProject: Identifiable, Codable, Hashable {
                 guard values.isDirectory == true, values.isSymbolicLink != true else { throw LumaError("The editor project folder is not a safe Luma directory.") }
             }
             try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: indexURL.path) {
-                let values = try indexURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-                guard values.isRegularFile == true, values.isSymbolicLink != true else { throw LumaError("The editor project index is not a regular Luma file.") }
-            }
-            if FileManager.default.fileExists(atPath: indexURL.path) {
-                let data = try Data(contentsOf: indexURL)
+            if let data = try readIndexData() {
+                persistedIndexData = data
                 let index = try JSONDecoder().decode(EditorProjectIndex.self, from: data)
                 projects = index.projects
                 recentProjectIDs = index.recentProjectIDs
@@ -124,10 +122,32 @@ struct EditorProject: Identifiable, Codable, Hashable {
         let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title.count <= 120 else { throw LumaError("Use a project name between 1 and 120 characters.") }
         guard let index = projects.firstIndex(where: { $0.id == id }) else { throw LumaError("This editor project is no longer in the project list.") }
+        let previousProjects = projects, previousRecents = recentProjectIDs
         let document = try SceneProjectDocument(folder: folder(for: projects[index]))
-        document.title = title; try document.save()
-        try update(id) { item in
-            item.title = title; item.scriptApprovalFingerprint = nil; item.scriptsEnabled = false
+        projects[index].title = title
+        projects[index].scriptApprovalFingerprint = nil
+        projects[index].scriptsEnabled = false
+        do { try persist() }
+        catch { projects = previousProjects; recentProjectIDs = previousRecents; throw error }
+        document.title = title
+        do {
+            try document.save()
+        } catch {
+            let saveError = error.localizedDescription
+            do { try restoreStoreSnapshot(projects: previousProjects, recents: previousRecents) }
+            catch { throw LumaError("The project rename failed: \(saveError). Restoring its index also failed: \(error.localizedDescription). Reopen the project list and review its title.") }
+            throw error
+        }
+    }
+
+    func restoreStoreSnapshot(projects: [EditorProject], recents: [UUID]) throws {
+        self.projects = projects
+        self.recentProjectIDs = recents
+        do { try persist() }
+        catch {
+            let message = "The editor project index could not be rolled back: \(error.localizedDescription). Reopen Luma and inspect the project list before editing."
+            loadError = message
+            throw LumaError(message)
         }
     }
 
@@ -167,29 +187,68 @@ struct EditorProject: Identifiable, Codable, Hashable {
         } catch { try? FileManager.default.removeItem(at: destination); throw error }
     }
 
+    var clearDataProjectCount: Int? { try? clearOwnership().count }
+
+    func validateManagedProjectsForClear() throws {
+        _ = try validatedProjectFoldersForClear()
+    }
+
     func clearManagedProjects() throws {
-        try requireWritable()
-        if FileManager.default.fileExists(atPath: base.path) {
-            let values = try base.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            guard values.isDirectory == true, values.isSymbolicLink != true else { throw LumaError("The editor project folder is not a safe Luma directory. It was left untouched.") }
-        }
-        let ownedFolders = try projects.map { project -> URL in
-            guard project.folderName == project.id.uuidString else { throw LumaError("An editor project has an unsafe ownership record. Nothing was removed.") }
-            let folder = try Safety.child(project.folderName, under: base)
-            if FileManager.default.fileExists(atPath: folder.path) { try Self.validateTree(folder) }
-            return folder
-        }
-        if FileManager.default.fileExists(atPath: indexURL.path) {
-            let values = try indexURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            guard values.isRegularFile == true, values.isSymbolicLink != true else { throw LumaError("The editor project index is not a regular Luma file. It was left untouched.") }
-        }
+        let ownedFolders = try validatedProjectFoldersForClear()
+
         for folder in ownedFolders where FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
         if FileManager.default.fileExists(atPath: indexURL.path) { try FileManager.default.removeItem(at: indexURL) }
         if FileManager.default.fileExists(atPath: base.path), (try FileManager.default.contentsOfDirectory(atPath: base.path)).isEmpty {
             try FileManager.default.removeItem(at: base)
         }
         projects = []; recentProjectIDs = []
+        persistedIndexData = nil
         loadError = "Luma data was cleared. Relaunch Luma to create new projects."
+    }
+
+    private func validatedProjectFoldersForClear() throws -> [URL] {
+        let ownership = try clearOwnership()
+        return try ownership.map { project -> URL in
+            let folder = try Safety.child(project.folderName, under: base)
+            if FileManager.default.fileExists(atPath: folder.path) { try Self.validateTree(folder) }
+            return folder
+        }
+    }
+
+    private func clearOwnership() throws -> [EditorProject] {
+        // Clear Data must be retryable after a prior partial cleanup. The
+        // project index remains the ownership record even when a referenced
+        // project folder is missing or its document is malformed, so validate
+        // the index and its UUID paths directly instead of requiring a fully
+        // loadable editor store.
+        try Safety.validateDirectoryIfPresent(library.root)
+        _ = try Safety.child("EditorProjects", under: library.root)
+        try Safety.validateDirectoryIfPresent(base)
+        if FileManager.default.fileExists(atPath: base.path) {
+            let values = try base.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else { throw LumaError("The editor project folder is not a safe Luma directory. It was left untouched.") }
+        }
+
+        let ownership: [EditorProject]
+        if let data = try verifyIndexSnapshot(allowMissingForClear: true) {
+            let index = try JSONDecoder().decode(EditorProjectIndex.self, from: data)
+            let ids = Set(index.projects.map(\.id))
+            guard index.projects.count <= 10_000, ids.count == index.projects.count else {
+                throw LumaError("The editor project index has duplicate IDs or too many entries. It was preserved because ownership is unclear.")
+            }
+            ownership = index.projects
+        } else {
+            // If this live store loaded successfully, its in-memory list came
+            // from the last valid index. If loading failed, there is no safe
+            // ownership data to use when the index is gone.
+            guard loadError == nil else { throw LumaError("The editor project index is unreadable or missing. It was preserved because Luma cannot safely identify its owned project folders.") }
+            ownership = projects
+        }
+
+        for project in ownership {
+            guard project.folderName == project.id.uuidString else { throw LumaError("An editor project has an unsafe ownership record. Nothing was removed.") }
+        }
+        return ownership
     }
 
     private func requireWritable() throws {
@@ -197,11 +256,41 @@ struct EditorProject: Identifiable, Codable, Hashable {
         try Safety.validateDirectoryIfPresent(library.root)
         _ = try Safety.child("EditorProjects", under: library.root)
         try Safety.validateDirectoryIfPresent(base)
+        _ = try verifyIndexSnapshot()
+    }
+
+    private func readIndexData() throws -> Data? {
+        let safeIndexURL = try Safety.child("projects.json", under: base)
+        let attributes: [FileAttributeKey: Any]
+        do { attributes = try FileManager.default.attributesOfItem(atPath: safeIndexURL.path) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber, size.intValue <= 16 * 1024 * 1024 else {
+            throw LumaError("The editor project index is not a regular file within the 16 MiB limit. It was preserved.")
+        }
+        return try Data(contentsOf: safeIndexURL)
+    }
+
+    private func verifyIndexSnapshot(allowMissingForClear: Bool = false) throws -> Data? {
+        let current = try readIndexData()
+        // A partial cleanup can remove the index before an empty-directory
+        // removal fails. Its already-loaded UUID ownership remains sufficient
+        // for retrying cleanup, but must never recreate the missing index.
+        guard current == persistedIndexData || (allowMissingForClear && current == nil && loadError == nil) else {
+            throw LumaError("The editor project index changed outside Luma. Reopen Luma before editing or clearing data; the newer file was preserved.")
+        }
+        return current
     }
 
     private func markRecent(_ id: UUID) { recentProjectIDs.removeAll { $0 == id }; recentProjectIDs.insert(id, at: 0); if recentProjectIDs.count > 20 { recentProjectIDs = Array(recentProjectIDs.prefix(20)) } }
     func folder(for project: EditorProject) -> URL { base.appendingPathComponent(project.folderName, isDirectory: true) }
-    private func persist() throws { try requireWritable(); _ = try Safety.child("projects.json", under: base); try JSONEncoder().encode(EditorProjectIndex(projects: projects, recentProjectIDs: recentProjectIDs)).write(to: indexURL, options: .atomic) }
+    private func persist() throws {
+        try requireWritable()
+        let data = try JSONEncoder().encode(EditorProjectIndex(projects: projects, recentProjectIDs: recentProjectIDs))
+        guard data.count <= 16 * 1024 * 1024 else { throw LumaError("The editor project index exceeds the 16 MiB limit.") }
+        try data.write(to: indexURL, options: .atomic)
+        persistedIndexData = data
+    }
     private func validateIndex() throws {
         let ids = Set(projects.map(\.id))
         guard ids.count == projects.count, projects.count <= 10_000 else { throw LumaError("The editor project list contains duplicate IDs or too many entries.") }
@@ -278,14 +367,26 @@ struct SceneProjectPackage {
     private var package: SceneProjectPackage?
     private var sceneEntryName: String?
     private var originalEntryBytes = Data()
+    private var originalProjectBytes = Data()
     private var isLooseScene = false
     private var undoStack: [Data] = []
     private var redoStack: [Data] = []
+    private var undoBytes = 0
+    private var redoBytes = 0
+    private static let maxHistoryBytes = 128 * 1024 * 1024
+    private let metadataWriter: (Data, URL) throws -> Void
 
-    init(folder: URL) throws {
+    init(folder: URL, metadataWriter: @escaping (Data, URL) throws -> Void = { data, url in try data.write(to: url, options: .atomic) }) throws {
         self.folder = folder
+        self.metadataWriter = metadataWriter
         try EditorProjectStore.validateTree(folder)
         let projectURL = try Safety.child("project.json", under: folder)
+        let projectAttributes = try FileManager.default.attributesOfItem(atPath: projectURL.path)
+        guard projectAttributes[.type] as? FileAttributeType == .typeRegular,
+              let projectSize = projectAttributes[.size] as? NSNumber,
+              projectSize.intValue >= 0, projectSize.intValue <= 8 * 1024 * 1024 else {
+            throw LumaError("project.json is not a regular project file within the 8 MiB editor limit.")
+        }
         let projectData = try Data(contentsOf: projectURL)
         guard projectData.count <= 8 * 1024 * 1024,
               let project = try JSONSerialization.jsonObject(with: projectData) as? [String: Any],
@@ -293,6 +394,16 @@ struct SceneProjectPackage {
               let file = project["file"] as? String else { throw LumaError("This editor supports Wallpaper Engine scene projects with a valid project.json.") }
         entry = file; title = project["title"] as? String ?? folder.lastPathComponent
         let fileURL = try Safety.child(file, under: folder)
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        guard fileAttributes[.type] as? FileAttributeType == .typeRegular,
+              let fileSize = fileAttributes[.size] as? NSNumber,
+              fileSize.intValue >= 0, fileSize.intValue <= 2 * 1024 * 1024 * 1024 else {
+            throw LumaError("The scene entry is not a regular file within the 2 GiB editor limit.")
+        }
+        guard try !Self.sameFile(fileURL, projectURL) else {
+            throw LumaError("The scene entry points to project.json. This project is malformed and cannot be edited safely.")
+        }
+        originalProjectBytes = projectData
         originalEntryBytes = try Data(contentsOf: fileURL, options: .mappedIfSafe)
         if fileURL.pathExtension.lowercased() == "pkg" {
             let parsed = try SceneProjectPackage(data: originalEntryBytes)
@@ -420,20 +531,42 @@ struct SceneProjectPackage {
     }
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
+    var retainedHistoryBytes: Int { undoBytes + redoBytes }
     func undo() throws {
-        guard let prior = undoStack.popLast() else { return }
-        redoStack.append(try JSONSerialization.data(withJSONObject: scene, options: [.fragmentsAllowed]))
-        scene = try Self.decodeScene(prior)
+        guard let prior = undoStack.last else { return }
+        let restored = try Self.decodeScene(prior)
+        let current = try JSONSerialization.data(withJSONObject: scene, options: [.fragmentsAllowed])
+        undoStack.removeLast(); undoBytes -= prior.count
+        redoStack.append(current); redoBytes += current.count
+        scene = restored
+        trimHistory()
     }
     func redo() throws {
-        guard let next = redoStack.popLast() else { return }
-        undoStack.append(try JSONSerialization.data(withJSONObject: scene, options: [.fragmentsAllowed]))
-        scene = try Self.decodeScene(next)
+        guard let next = redoStack.last else { return }
+        let restored = try Self.decodeScene(next)
+        let current = try JSONSerialization.data(withJSONObject: scene, options: [.fragmentsAllowed])
+        redoStack.removeLast(); redoBytes -= next.count
+        undoStack.append(current); undoBytes += current.count
+        scene = restored
+        trimHistory()
     }
     private func checkpoint() throws {
-        undoStack.append(try JSONSerialization.data(withJSONObject: scene, options: [.fragmentsAllowed]))
-        if undoStack.count > 100 { undoStack.removeFirst(undoStack.count - 100) }
-        redoStack.removeAll()
+        let snapshot = try JSONSerialization.data(withJSONObject: scene, options: [.fragmentsAllowed])
+        guard snapshot.count <= Self.maxHistoryBytes else { throw LumaError("This scene snapshot exceeds the editor's 128 MiB undo limit.") }
+        undoStack.append(snapshot); undoBytes += snapshot.count
+        redoStack.removeAll(); redoBytes = 0
+        while undoStack.count > 100 { undoBytes -= undoStack.removeFirst().count }
+        trimHistory()
+    }
+    private func trimHistory() {
+        while undoBytes + redoBytes > Self.maxHistoryBytes {
+            // Drop the oldest retained state first. The stack's last element is
+            // the next state needed for undo/redo, so its first element is the
+            // least useful one to retain.
+            if !undoStack.isEmpty { undoBytes -= undoStack.removeFirst().count }
+            else if !redoStack.isEmpty { redoBytes -= redoStack.removeFirst().count }
+            else { break }
+        }
     }
     func save() throws {
         try Self.validateScene(scene)
@@ -442,24 +575,70 @@ struct SceneProjectPackage {
             throw LumaError("The scene file changed outside this editor. Reopen the project before saving to preserve those changes.")
         }
         let projectURL = try Safety.child("project.json", under: folder)
-        guard var project = try JSONSerialization.jsonObject(with: Data(contentsOf: projectURL)) as? [String: Any] else { throw LumaError("The project metadata is no longer valid. Reopen the project before saving.") }
+        guard try !Self.sameFile(sceneURL, projectURL) else {
+            throw LumaError("The scene entry aliases project.json. Reopen a valid project before saving.")
+        }
+        let currentProjectBytes = try Data(contentsOf: projectURL, options: .mappedIfSafe)
+        guard currentProjectBytes == originalProjectBytes else {
+            throw LumaError("The project metadata changed outside this editor. Reopen the project before saving to preserve those changes.")
+        }
+        guard var project = try JSONSerialization.jsonObject(with: currentProjectBytes) as? [String: Any],
+              (project["type"] as? String)?.lowercased() == "scene", project["file"] as? String == entry else {
+            throw LumaError("The project entry or type no longer matches the opened scene. Reopen the project before saving.")
+        }
         project["title"] = title
         let encodedProject = try JSONSerialization.data(withJSONObject: project, options: [.sortedKeys, .fragmentsAllowed])
         let encodedScene = try JSONSerialization.data(withJSONObject: scene, options: [.sortedKeys, .fragmentsAllowed])
+        let sceneBytesToWrite: Data
         if let package, let sceneEntryName {
             var updated = package
             guard let index = updated.entries.firstIndex(where: { $0.name == sceneEntryName }) else { throw LumaError("The scene package changed since it was opened.") }
             updated.entries[index].bytes = encodedScene
-            let pkgURL = try Safety.child(entry, under: folder)
-            let bytes = try updated.encoded()
-            _ = try SceneProjectPackage(data: bytes)
-            try bytes.write(to: pkgURL, options: .atomic)
-            originalEntryBytes = bytes
+            sceneBytesToWrite = try updated.encoded()
+            _ = try SceneProjectPackage(data: sceneBytesToWrite)
         } else if isLooseScene, let sceneEntryName {
-            try encodedScene.write(to: Safety.child(sceneEntryName, under: folder), options: .atomic)
-            originalEntryBytes = encodedScene
+            sceneBytesToWrite = encodedScene
+            guard try Safety.child(sceneEntryName, under: folder).standardizedFileURL == sceneURL.standardizedFileURL else {
+                throw LumaError("The loose scene entry changed. Reopen the project before saving.")
+            }
+        } else {
+            throw LumaError("This project has no editable scene entry.")
         }
-        try encodedProject.write(to: projectURL, options: .atomic)
+
+        // Both files are staged in memory and revalidated before either write.
+        // If the second atomic replacement fails, restore the original scene
+        // bytes so a reported failure never leaves a half-saved project.
+        try sceneBytesToWrite.write(to: sceneURL, options: .atomic)
+        do {
+            guard try Data(contentsOf: projectURL, options: .mappedIfSafe) == originalProjectBytes else {
+                throw LumaError("The project metadata changed while saving. The scene file will be restored.")
+            }
+            guard try Data(contentsOf: sceneURL, options: .mappedIfSafe) == sceneBytesToWrite else {
+                throw LumaError("The scene file changed while saving. Reopen the project before continuing.")
+            }
+            try metadataWriter(encodedProject, projectURL)
+        } catch {
+            guard (try? Data(contentsOf: sceneURL, options: .mappedIfSafe)) == sceneBytesToWrite else {
+                throw LumaError("The project metadata could not be saved, and the scene file changed concurrently. Luma preserved the newer scene file; reopen the project before continuing.")
+            }
+            do { try originalEntryBytes.write(to: sceneURL, options: .atomic) }
+            catch {
+                throw LumaError("Project metadata could not be saved, and restoring the scene file also failed: \(error.localizedDescription). Reopen the project and inspect both files before continuing.")
+            }
+            throw error
+        }
+        originalEntryBytes = sceneBytesToWrite
+        originalProjectBytes = encodedProject
+    }
+
+    private static func sameFile(_ lhs: URL, _ rhs: URL) throws -> Bool {
+        var left = stat(), right = stat()
+        let leftResult = lhs.path.withCString { Darwin.lstat($0, &left) }
+        let rightResult = rhs.path.withCString { Darwin.lstat($0, &right) }
+        guard leftResult == 0, rightResult == 0 else {
+            throw LumaError("Could not verify the project and scene file identities: \(String(cString: strerror(Darwin.errno))).")
+        }
+        return left.st_dev == right.st_dev && left.st_ino == right.st_ino
     }
 
     private static func decodeScene(_ data: Data) throws -> [String: Any] {

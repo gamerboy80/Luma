@@ -47,6 +47,7 @@ struct ContentView: View {
                 StatusFooter(library:model.library,desktop:model.desktop)
             }.background(panel)
         }.frame(minWidth:980,minHeight:670)
+        .background(LibraryWindowMarker())
         .onAppear {
             if let delegate = NSApp.delegate as? AppDelegate {
                 delegate.model = model

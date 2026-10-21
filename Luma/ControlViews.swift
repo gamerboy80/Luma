@@ -26,7 +26,7 @@ struct WorkshopView: View {
                         HStack {Text(item.kind).font(.caption2).foregroundStyle(.secondary);Spacer();Link("View",destination:URL(string:"https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.id)")!);Button("Download"){steam.download(item);showSetup=true}.disabled(steam.running || item.kind == "Application")}.font(.caption)
                     }.padding(10).background(.white.opacity(0.025),in:RoundedRectangle(cornerRadius:12))
                 }}
-                if !workshop.items.isEmpty && workshop.items.count < workshop.total {Button("Load More"){workshop.search(nextPage:true)}.disabled(workshop.searching).frame(maxWidth:.infinity)}
+                if workshop.canLoadMore {Button("Load More"){workshop.search(nextPage:true)}.frame(maxWidth:.infinity)}
                 if showSetup || steam.running {steamConsole}
             }.padding(30)
         }
@@ -137,7 +137,7 @@ struct LockScreenView:View {
                         Button("Preview Still") { preview = .still(url) }
                         Button("Open Wallpaper Settings") { native.openSettings() }
                         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                        Button("Remove Still",role:.destructive) { do { try native.removeStaticFallback() } catch { library.error=error.localizedDescription } }
+                        Button("Remove Still",role:.destructive) { do { try native.removeStaticFallback() } catch { library.error=error.localizedDescription } }.disabled(native.busy)
                     }
                 }
                 Text("For a scene, Luma prefers a source image, then a representative frame from a video, then a captured frame of the rendered scene. The PNG is a preview/export: macOS has no supported public API to set a separate lock-screen-only photo, so Luma does not apply it or change your desktop wallpaper. Selecting it in System Settings may also change the desktop. If you selected this PNG there, choose another wallpaper before removing the file in Luma; Luma cannot track or restore that manual selection.").font(.caption).foregroundStyle(.secondary)
@@ -150,7 +150,7 @@ struct LockScreenView:View {
                 Text("Exported scenes preserve their rendered appearance. Cursor interaction, clocks, and audio response are frozen into the recorded loop; a seamless boundary depends on the scene.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Also update the native wallpaper selection",isOn:$native.selectAutomatically)
                 Text("When macOS links the desktop and idle wallpaper, this also changes the native desktop still. Luma preserves that link and unrelated settings. Leave this off to select the Luma collection in System Settings yourself.").font(.caption).foregroundStyle(.secondary)
-                HStack {Button("Connect Wallpaper Folder…"){native.chooseRoot()};Spacer();Button("Install for Lock Screen…"){if let wallpaper=library.state.wallpapers.first(where:{$0.id == selection}){native.install(wallpaper,assets:model.desktop.assetsURL)}}.buttonStyle(.borderedProminent).tint(tintColor).disabled(selection == nil || native.busy)}
+                HStack {Button("Connect Wallpaper Folder…"){native.chooseRoot()}.disabled(native.busy);Spacer();Button("Install for Lock Screen…"){if let wallpaper=library.state.wallpapers.first(where:{$0.id == selection}){native.install(wallpaper,assets:model.desktop.assetsURL)}}.buttonStyle(.borderedProminent).tint(tintColor).disabled(selection == nil || native.busy)}
                 if native.busy {ProgressView(value:native.progress);Button("Cancel"){native.cancel()}}
                 Text(native.status).font(.caption).textSelection(.enabled)
                 if let receipt=native.receipt {LabeledContent("Last installed",value:receipt.title); if let source = receipt.sourceDescription { LabeledContent("Source used", value: source) }}

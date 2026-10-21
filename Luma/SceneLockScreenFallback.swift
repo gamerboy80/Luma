@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import AVFoundation
+import ImageIO
 
 enum SceneLockScreenMode: String, CaseIterable, Identifiable {
     case automatic, sourceMedia, snapshot
@@ -15,7 +16,7 @@ enum SceneLockScreenMode: String, CaseIterable, Identifiable {
     static func image(wallpaper: Wallpaper, folder: URL, mediaURL: URL, assets: URL?, preferences: AppPreferences) async throws -> (Data, String) {
         switch wallpaper.kind {
         case .image:
-            return (try normalizedImage(Data(contentsOf: mediaURL)), "Source image")
+            return (try normalizedImage(try boundedImageData(at: mediaURL)), "Source image")
         case .video:
             let (png, _) = try await videoFrame(mediaURL)
             return (png, "Video frame")
@@ -132,11 +133,34 @@ enum SceneLockScreenMode: String, CaseIterable, Identifiable {
         throw LumaError("No source image, video frame, rendered frame, or usable preview was available. \(hostFailure ?? "")")
     }
 
-    private static func normalizedImage(_ bytes: Data) throws -> Data {
-        guard let bitmap = NSBitmapImageRep(data: bytes), let png = bitmap.representation(using: .png, properties: [:]) else {
+    static func normalizedImage(_ bytes: Data) throws -> Data {
+        guard bytes.count <= 96 * 1024 * 1024,
+              let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              width > 0, height > 0, width <= 8192, height <= 8192,
+              width.multipliedReportingOverflow(by: height).overflow == false,
+              width * height <= 16_777_216,
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw LumaError("This wallpaper image could not be decoded as a still image.")
         }
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        guard let png = bitmap.representation(using: .png, properties: [:]), png.count <= 96 * 1024 * 1024 else {
+            throw LumaError("This wallpaper image could not be encoded within Luma's 96 MiB still-image limit.")
+        }
         return png
+    }
+
+    private static func boundedImageData(at url: URL) throws -> Data {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber, size.int64Value >= 0, size.int64Value <= 96 * 1024 * 1024 else {
+            throw LumaError("The source image is not a regular file within Luma's 96 MiB image limit.")
+        }
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        guard data.count <= 96 * 1024 * 1024 else { throw LumaError("The source image exceeds Luma's 96 MiB image limit.") }
+        return data
     }
 
     private static func videoFrame(_ url: URL) async throws -> (Data, String) {
@@ -174,8 +198,19 @@ struct SceneMediaCandidate {
         return score
     }
     func bytes() throws -> Data {
-        if let file { return try Data(contentsOf: file, options: .mappedIfSafe) }
+        let limit = (isVideo || ext == "tex") ? 2 * 1024 * 1024 * 1024 : 96 * 1024 * 1024
+        if let file {
+            let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular,
+                  let size = attributes[.size] as? NSNumber, size.int64Value >= 0, size.int64Value <= Int64(limit) else {
+                throw LumaError("Scene media \(name) is not a regular file within Luma's size limit.")
+            }
+            let data = try Data(contentsOf: file, options: .mappedIfSafe)
+            guard data.count <= limit else { throw LumaError("Scene media \(name) grew beyond Luma's size limit.") }
+            return data
+        }
         guard let archive, let range else { throw LumaError("The scene media is missing.") }
+        guard range.count <= limit else { throw LumaError("Scene media \(name) exceeds Luma's size limit.") }
         return archive.subdata(in: range)
     }
 }
@@ -185,8 +220,11 @@ enum SceneMediaDiscovery {
     static func candidates(folder: URL, entry: String, preview: String?) throws -> [SceneMediaCandidate] {
         var results: [SceneMediaCandidate] = []
         if let enumerator = FileManager.default.enumerator(atPath: folder.path) {
+            var visited = 0
             for case let relative as String in enumerator {
                 try Task.checkCancellation()
+                visited += 1
+                guard visited <= 50_000 else { throw LumaError("The scene project has more than 50,000 files. Luma stopped scanning to keep the fallback responsive.") }
                 if relative.split(separator: "/").contains(where: { $0.hasPrefix(".") }) { enumerator.skipDescendants(); continue }
                 guard let safe = try? Safety.child(relative, under: folder), (try? safe.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
                 if extensions.contains(safe.pathExtension.lowercased()) {
@@ -199,7 +237,11 @@ enum SceneMediaDiscovery {
         for package in packages {
             guard let url = try? Safety.child(package, under: folder), FileManager.default.fileExists(atPath: url.path) else { continue }
             // A bad package must not prevent a loose image/preview from being used.
-            if let bytes = try? Data(contentsOf: url, options: .mappedIfSafe), let embedded = try? archiveCandidates(bytes) { results += embedded }
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  let size = attributes[.size] as? NSNumber, size.int64Value >= 0, size.int64Value <= 2 * 1024 * 1024 * 1024 else { continue }
+            if let bytes = try? Data(contentsOf: url, options: .mappedIfSafe), bytes.count <= 2 * 1024 * 1024 * 1024,
+               let embedded = try? archiveCandidates(bytes) { results += embedded }
         }
         return results.sorted { a, b in
             if a.priority != b.priority { return a.priority > b.priority }

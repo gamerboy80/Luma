@@ -46,7 +46,8 @@ enum WallperVideosDiscoveryService {
         var videos: [WallperVideoFile] = []
         var issues: [String] = []
         var supportedCandidateCount = 0
-        try scan(directory: root, root: root, videos: &videos, issues: &issues, supportedCandidateCount: &supportedCandidateCount)
+        var visitedEntries = 0
+        try scan(directory: root, root: root, depth: 0, visitedEntries: &visitedEntries, videos: &videos, issues: &issues, supportedCandidateCount: &supportedCandidateCount)
         videos.sort { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
         return WallperVideosDiscovery(folderExists: true, supportedCandidateCount: supportedCandidateCount, videos: videos, issues: issues)
     }
@@ -87,7 +88,7 @@ enum WallperVideosDiscoveryService {
         }
         let fileMode = try fileMode(at: file)
         guard fileMode.map({ $0 & mode_t(S_IFMT) == mode_t(S_IFREG) }) == true else { throw LumaError("\(file.lastPathComponent) is not a regular video file.") }
-        let descriptor = try openRegularFile(file)
+        let descriptor = try openRegularFile(file, under: root)
         Darwin.close(descriptor)
         return file
     }
@@ -114,7 +115,7 @@ enum WallperVideosDiscoveryService {
     /// component. The digest is calculated from the bytes actually copied.
     static func copyRegularFile(_ source: URL, under folder: URL, to destination: URL) throws -> String {
         let safeSource = try validate(source, under: folder)
-        let inputFD = try openRegularFile(safeSource)
+        let inputFD = try openRegularFile(safeSource, under: folder)
         defer { Darwin.close(inputFD) }
         let outputFD = destination.path.withCString { path in
             Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(S_IRUSR | S_IWUSR))
@@ -156,8 +157,25 @@ enum WallperVideosDiscoveryService {
         return digestString(hasher.finalize())
     }
 
-    private static func openRegularFile(_ url: URL) throws -> Int32 {
-        let fd = url.path.withCString { path in Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+    private static func openRegularFile(_ url: URL, under root: URL) throws -> Int32 {
+        let rootPath = root.standardizedFileURL.path
+        let urlPath = url.standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard urlPath.hasPrefix(prefix) else { throw LumaError("\(url.lastPathComponent) is outside the selected Wallper folder.") }
+        let relative = String(urlPath.dropFirst(prefix.count))
+        let components = relative.split(separator: "/", omittingEmptySubsequences: false)
+        guard !relative.isEmpty, components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw LumaError("\(url.lastPathComponent) has an unsafe Wallper path.")
+        }
+        var directoryFD = root.path.withCString { Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW) }
+        guard directoryFD >= 0 else { throw LumaError("Could not open the Wallper folder safely: \(String(cString: strerror(Darwin.errno))).") }
+        defer { Darwin.close(directoryFD) }
+        for component in components.dropLast() {
+            let next = component.withCString { Darwin.openat(directoryFD, $0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW) }
+            guard next >= 0 else { throw LumaError("Could not open Wallper folder \(component) safely: \(String(cString: strerror(Darwin.errno))).") }
+            Darwin.close(directoryFD); directoryFD = next
+        }
+        let fd = components.last!.withCString { Darwin.openat(directoryFD, $0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK) }
         guard fd >= 0 else {
             throw LumaError("Could not open \(url.lastPathComponent) safely: \(String(cString: strerror(Darwin.errno)))")
         }
@@ -173,11 +191,21 @@ enum WallperVideosDiscoveryService {
         return fd
     }
 
+    private static func openRegularFile(_ url: URL) throws -> Int32 {
+        let fd = url.path.withCString { Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK) }
+        guard fd >= 0 else { throw LumaError("Could not open \(url.lastPathComponent) safely: \(String(cString: strerror(Darwin.errno)))") }
+        var metadata = stat()
+        guard Darwin.fstat(fd, &metadata) == 0 else { let detail = String(cString: strerror(Darwin.errno)); Darwin.close(fd); throw LumaError("Could not inspect \(url.lastPathComponent): \(detail)") }
+        guard metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else { Darwin.close(fd); throw LumaError("\(url.lastPathComponent) is not a readable regular file.") }
+        return fd
+    }
+
     private static func digestString(_ digest: SHA256.Digest) -> String {
         digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func scan(directory: URL, root: URL, videos: inout [WallperVideoFile], issues: inout [String], supportedCandidateCount: inout Int) throws {
+    private static func scan(directory: URL, root: URL, depth: Int, visitedEntries: inout Int, videos: inout [WallperVideoFile], issues: inout [String], supportedCandidateCount: inout Int) throws {
+        guard depth <= 32 else { throw LumaError("The Wallper Videos folder contains folders nested too deeply to scan safely.") }
         let children: [URL]
         do {
             children = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey], options: [.skipsHiddenFiles])
@@ -187,11 +215,13 @@ enum WallperVideosDiscoveryService {
             return
         }
         for child in children.sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
+            visitedEntries += 1
+            guard visitedEntries <= 50_000 else { throw LumaError("The Wallper Videos folder contains more than 50,000 entries. Luma stopped scanning to keep the library responsive.") }
             do {
                 if try isSymbolicLink(child) { continue }
                 let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey])
                 if values.isDirectory == true {
-                    try scan(directory: child, root: root, videos: &videos, issues: &issues, supportedCandidateCount: &supportedCandidateCount)
+                    try scan(directory: child, root: root, depth: depth + 1, visitedEntries: &visitedEntries, videos: &videos, issues: &issues, supportedCandidateCount: &supportedCandidateCount)
                     continue
                 }
                 guard values.isRegularFile == true, supportedExtensions.contains(child.pathExtension.lowercased()) else { continue }

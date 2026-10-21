@@ -11,8 +11,13 @@ import UniformTypeIdentifiers
     let root: URL
     var onChange: (() -> Void)?
     private var canSave = true
+    private var persistedLibraryData: Data?
+    private var persistedLibraryState: SavedLibrary?
+    private static let maxLibraryBytes = 64 * 1024 * 1024
     private var downloadTask: Task<Void, Never>?
+    private var activeImports = 0
     var hasDownloadInProgress: Bool { downloadTask != nil }
+    var hasImportInProgress: Bool { activeImports > 0 }
     var managedWallpaperFolders: [URL] {
         state.wallpapers.compactMap { wallpaper in
             guard wallpaper.folder == wallpaper.id.uuidString else { return nil }
@@ -27,9 +32,14 @@ import UniformTypeIdentifiers
             let stateURL = try Safety.child("library.json", under: self.root)
             if FileManager.default.fileExists(atPath: stateURL.path) {
                 do {
-                    let loaded = try JSONDecoder().decode(SavedLibrary.self, from: Data(contentsOf: stateURL))
-                    try validateLibrary(loaded)
-                    state = loaded
+                    let data = try Self.readLibraryData(at: stateURL)
+                    persistedLibraryData = data
+                    var normalized = try JSONDecoder().decode(SavedLibrary.self, from: data)
+                    normalized.preferences.normalizeForRuntime()
+                    for key in normalized.displays.keys { normalized.displays[key]?.normalizeForRuntime() }
+                    try validateLibrary(normalized)
+                    state = normalized
+                    persistedLibraryState = normalized
                 }
                 catch { canSave = false; self.error = "The library could not be read. The original file is preserved; use Reveal Library to recover it. \(error.localizedDescription)"; return }
             }
@@ -55,7 +65,29 @@ import UniformTypeIdentifiers
     }
     private func validateLibrary(_ value: SavedLibrary) throws {
         guard value.version == 1, Set(value.wallpapers.map(\.id)).count == value.wallpapers.count else { throw LumaError("The library version or wallpaper IDs are invalid.") }
+        let preferences = value.preferences
+        guard preferences.cpuThreshold.isFinite, (50...99).contains(preferences.cpuThreshold),
+              preferences.playlistSeconds.isFinite, (60...86_400).contains(preferences.playlistSeconds),
+              [24, 30, 60].contains(preferences.sceneFPS), (0...23).contains(preferences.dayHour),
+              (0...23).contains(preferences.nightHour) else {
+            throw LumaError("The library contains invalid playback settings. Luma will use safe defaults when loading them.")
+        }
+        for configuration in value.displays.values {
+            guard configuration.volume.isFinite, (0...1).contains(configuration.volume),
+                  configuration.speed.isFinite, (0.1...4).contains(configuration.speed),
+                  configuration.scale.isFinite, (0.1...4).contains(configuration.scale),
+                  configuration.offsetX.isFinite, abs(configuration.offsetX) <= 100_000,
+                  configuration.offsetY.isFinite, abs(configuration.offsetY) <= 100_000 else {
+                throw LumaError("The library contains invalid display settings.")
+            }
+        }
         for wallpaper in value.wallpapers {
+            guard !wallpaper.title.isEmpty, wallpaper.title.utf8.count <= 4096,
+                  wallpaper.duration.map({ $0.isFinite && $0 >= 0 && $0 <= 31_536_000 }) ?? true,
+                  wallpaper.width.map({ $0 > 0 && $0 <= 65_535 }) ?? true,
+                  wallpaper.height.map({ $0 > 0 && $0 <= 65_535 }) ?? true else {
+                throw LumaError("The library contains invalid wallpaper metadata.")
+            }
             _ = try mediaURL(wallpaper)
             if let preview = wallpaper.preview { _ = try Safety.child(preview, under: folder(wallpaper)) }
         }
@@ -65,15 +97,25 @@ import UniformTypeIdentifiers
         do {
             try Safety.validateDirectoryIfPresent(root)
             try validateLibrary(state)
-            try JSONEncoder().encode(state).write(to: Safety.child("library.json", under: root), options: .atomic)
+            let file = try Safety.child("library.json", under: root)
+            try validatePersistedLibraryFile(at: file)
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: file, options: .atomic)
+            persistedLibraryData = data
+            persistedLibraryState = state
         }
-        catch { self.error = "Could not save the library: \(error.localizedDescription)"; return false }
+        catch {
+            if let persistedLibraryState { state = persistedLibraryState }
+            self.error = "Could not save the library: \(error.localizedDescription)"
+            return false
+        }
         if notify { onChange?() }
         return true
     }
-    func edit(_ id: UUID, _ update: (inout Wallpaper) -> Void) {
-        guard let i = state.wallpapers.firstIndex(where: { $0.id == id }) else { return }
-        update(&state.wallpapers[i]); save()
+    @discardableResult func edit(_ id: UUID, _ update: (inout Wallpaper) -> Void) -> Bool {
+        guard let i = state.wallpapers.firstIndex(where: { $0.id == id }) else { return false }
+        update(&state.wallpapers[i])
+        return save()
     }
     func remove(_ wallpaper: Wallpaper) {
         guard canSave, let stored = state.wallpapers.first(where: { $0.id == wallpaper.id }), !stored.isBuiltIn else { return }
@@ -115,7 +157,10 @@ import UniformTypeIdentifiers
         }
     }
     func importURL(_ source: URL, workshopID: String? = nil, sourceDigest: String? = nil, titleOverride: String? = nil, safeSingleFileRoot: URL? = nil) async throws {
+        try Task.checkCancellation()
         guard canSave else { throw LumaError("Recover the unreadable library before importing more wallpapers.") }
+        activeImports += 1
+        defer { activeImports -= 1 }
         let fm = FileManager.default
         let sourceValues = try source.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
         guard sourceValues.isSymbolicLink != true, sourceValues.isDirectory == true || sourceValues.isRegularFile == true else { throw LumaError("Choose a regular media file or real project folder, not a symbolic link or special file.") }
@@ -173,12 +218,18 @@ import UniformTypeIdentifiers
             if kind == .video {
                 let asset = AVURLAsset(url: try Safety.child(wallpaper.entry, under: destination))
                 guard try await asset.load(.isPlayable), let track = try await asset.loadTracks(withMediaType: .video).first else { throw LumaError("macOS cannot decode this video. Convert it to H.264 or HEVC MP4/MOV first.") }
-                let size = try await track.load(.naturalSize); wallpaper.width = Int(size.width); wallpaper.height = Int(size.height)
+                let size = try await track.load(.naturalSize)
+                guard size.width.isFinite, size.height.isFinite, abs(size.width) >= 1, abs(size.height) >= 1,
+                      abs(size.width) <= 65_535, abs(size.height) <= 65_535 else {
+                    throw LumaError("The video reports invalid or unsupported frame dimensions.")
+                }
+                wallpaper.width = Int(abs(size.width)); wallpaper.height = Int(abs(size.height))
                 let duration = try await asset.load(.duration).seconds
                 wallpaper.duration = duration.isFinite && duration >= 0 ? duration : nil
                 let generator = AVAssetImageGenerator(asset: asset); generator.appliesPreferredTrackTransform = true; generator.maximumSize = CGSize(width: 900, height: 600)
                 if let image = try? await generator.image(at: .zero).image { let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]); try data?.write(to: destination.appendingPathComponent("luma-preview.png")); wallpaper.preview = "luma-preview.png" }
             } else if kind == .image { wallpaper.preview = wallpaper.entry }
+            try Task.checkCancellation()
             state.wallpapers.insert(wallpaper, at: 0)
             guard save() else {
                 state.wallpapers.removeAll { $0.id == wallpaper.id }
@@ -186,60 +237,139 @@ import UniformTypeIdentifiers
             }
         } catch { try? fm.removeItem(at: destination); throw error }
     }
+    private struct ClearTargets {
+        let mediaRoot: URL
+        let wallpaperFolders: [URL]
+        let libraryFile: URL
+        let receiptFile: URL
+        let nativeCacheRoot: URL
+        let nativeCacheFolders: [URL]
+    }
+
+    var clearDataWallpaperCount: Int? {
+        guard canSave else { return nil }
+        do {
+            try validateLibrary(state)
+            let file = try Safety.child("library.json", under: root)
+            try validateManagedFileIfPresent(file, fileManager: FileManager.default)
+            try validatePersistedLibraryFile(at: file)
+            return state.wallpapers.filter { !$0.isBuiltIn }.count
+        } catch { return nil }
+    }
+
+    func validateForClearData() throws {
+        _ = try clearTargets()
+    }
+
     func resetForClearData() throws {
-        guard canSave else { throw LumaError("Recover the unreadable library before clearing its data so Luma can identify its owned files safely.") }
+        let targets = try clearTargets()
         let fm = FileManager.default
-        let rootValues = try root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard rootValues.isDirectory == true, rootValues.isSymbolicLink != true else {
-            throw LumaError("The Luma data folder is not a normal directory. It was left untouched to protect other files.")
-        }
-
-        let mediaRoot = root.appendingPathComponent("Media", isDirectory: true)
-        try validateManagedDirectoryIfPresent(mediaRoot, fileManager: fm)
-        let wallpaperFolders = managedWallpaperFolders
-        for folder in wallpaperFolders { try validateManagedDirectoryIfPresent(folder, fileManager: fm) }
-
-        let libraryFile = root.appendingPathComponent("library.json")
-        let receiptFile = root.appendingPathComponent("native-receipt.json")
-        try validateManagedFileIfPresent(libraryFile, fileManager: fm)
-        try validateManagedFileIfPresent(receiptFile, fileManager: fm)
 
         // A wallpaper folder is Luma-owned only when its name matches the UUID
-        // stored in the library. Preserve all unknown entries in Media.
-        for folder in wallpaperFolders where fm.fileExists(atPath: folder.path) {
+        // stored in the validated library. Preserve all unknown entries.
+        for folder in targets.wallpaperFolders where fm.fileExists(atPath: folder.path) {
             try fm.removeItem(at: folder)
         }
-        try clearOwnedNativeCache(fileManager: fm)
-        for file in [libraryFile, receiptFile] where fm.fileExists(atPath: file.path) {
+        for folder in targets.nativeCacheFolders where fm.fileExists(atPath: folder.path) {
+            try fm.removeItem(at: folder)
+        }
+        for file in [targets.libraryFile, targets.receiptFile] where fm.fileExists(atPath: file.path) {
             try fm.removeItem(at: file)
         }
-        try removeDirectoryIfEmpty(mediaRoot, fileManager: fm)
+        try removeDirectoryIfEmpty(targets.mediaRoot, fileManager: fm)
+        try removeDirectoryIfEmpty(targets.nativeCacheRoot, fileManager: fm)
         try removeDirectoryIfEmpty(root, fileManager: fm)
         // Clear Data terminates the app after cleanup. Do not recreate the
         // library or built-in wallpaper assets during the shutdown path.
         state = SavedLibrary(); canSave = false; error = nil; activity = nil; progress = 0
     }
+
+    private func clearTargets() throws -> ClearTargets {
+        guard !hasImportInProgress, !hasDownloadInProgress else { throw LumaError("Wait for wallpaper imports and downloads to finish before clearing Luma data.") }
+        guard canSave else { throw LumaError("Recover the unreadable library before clearing its data so Luma can identify its owned files safely.") }
+        let fm = FileManager.default
+        try Safety.validateDirectoryIfPresent(root)
+        let rootValues = try root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard rootValues.isDirectory == true, rootValues.isSymbolicLink != true else {
+            throw LumaError("The Luma data folder is not a normal directory. It was left untouched to protect other files.")
+        }
+        try validateLibrary(state)
+
+        let mediaRoot = try Safety.child("Media", under: root)
+        try validateManagedDirectoryIfPresent(mediaRoot, fileManager: fm)
+        let wallpaperFolders = try state.wallpapers.map { wallpaper -> URL in
+            let folder = try Safety.child("Media/\(wallpaper.id.uuidString)", under: root)
+            try validateManagedDirectoryIfPresent(folder, fileManager: fm)
+            if fm.fileExists(atPath: folder.path) { try Safety.validateProjectTree(folder) }
+            return folder
+        }
+
+        let libraryFile = try Safety.child("library.json", under: root)
+        let receiptFile = try Safety.child("native-receipt.json", under: root)
+        try validateManagedFileIfPresent(libraryFile, fileManager: fm)
+        try validateManagedFileIfPresent(receiptFile, fileManager: fm)
+        try validatePersistedLibraryFile(at: libraryFile)
+
+        let nativeCacheRoot = try Safety.child("NativeCache", under: root)
+        let nativeCacheFolders = try ownedNativeCacheFolders(at: nativeCacheRoot, fileManager: fm)
+        return ClearTargets(mediaRoot: mediaRoot, wallpaperFolders: wallpaperFolders,
+                            libraryFile: libraryFile, receiptFile: receiptFile,
+                            nativeCacheRoot: nativeCacheRoot, nativeCacheFolders: nativeCacheFolders)
+    }
+
+    private func validatePersistedLibraryFile(at url: URL) throws {
+        let current: Data?
+        do { current = try Self.readLibraryData(at: url) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { current = nil }
+        catch {
+            let message = "Luma could not verify the current library file. It was preserved to avoid overwriting newer data: \(error.localizedDescription)"
+            self.error = message
+            throw LumaError(message)
+        }
+        guard current == persistedLibraryData else {
+            canSave = false
+            let message = "The library changed outside Luma after it was loaded. The newer file was preserved; reopen Luma before editing or clearing data."
+            self.error = message
+            throw LumaError(message)
+        }
+    }
+
+    private static func readLibraryData(at url: URL) throws -> Data {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber,
+              size.intValue >= 0, size.intValue <= maxLibraryBytes else {
+            throw LumaError("The library file is not a regular file within Luma's 64 MiB limit. It was preserved.")
+        }
+        return try Data(contentsOf: url)
+    }
+
     private func validateManagedDirectoryIfPresent(_ url: URL, fileManager fm: FileManager) throws {
-        guard let attributes = try? fm.attributesOfItem(atPath: url.path) else { return }
+        guard let attributes = try attributesIfPresent(url, fileManager: fm) else { return }
         guard attributes[.type] as? FileAttributeType == .typeDirectory else {
             throw LumaError("\(url.path) is not a Luma-managed directory. It was left untouched.")
         }
     }
     private func validateManagedFileIfPresent(_ url: URL, fileManager fm: FileManager) throws {
-        guard let attributes = try? fm.attributesOfItem(atPath: url.path) else { return }
+        guard let attributes = try attributesIfPresent(url, fileManager: fm) else { return }
         guard attributes[.type] as? FileAttributeType == .typeRegular else {
             throw LumaError("\(url.path) is not a regular Luma file. It was left untouched.")
         }
+    }
+    private func attributesIfPresent(_ url: URL, fileManager fm: FileManager) throws -> [FileAttributeKey: Any]? {
+        do { return try fm.attributesOfItem(atPath: url.path) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
+        catch { throw LumaError("Could not inspect managed path \(url.path): \(error.localizedDescription)") }
     }
     private func removeDirectoryIfEmpty(_ url: URL, fileManager fm: FileManager) throws {
         guard fm.fileExists(atPath: url.path) else { return }
         let contents = try fm.contentsOfDirectory(atPath: url.path)
         if contents.isEmpty { try fm.removeItem(at: url) }
     }
-    private func clearOwnedNativeCache(fileManager fm: FileManager) throws {
-        let cacheRoot = root.appendingPathComponent("NativeCache", isDirectory: true)
+    private func ownedNativeCacheFolders(at cacheRoot: URL, fileManager fm: FileManager) throws -> [URL] {
         try validateManagedDirectoryIfPresent(cacheRoot, fileManager: fm)
-        guard fm.fileExists(atPath: cacheRoot.path) else { return }
+        guard fm.fileExists(atPath: cacheRoot.path) else { return [] }
+        var owned: [URL] = []
         for child in try fm.contentsOfDirectory(at: cacheRoot, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]) {
             guard UUID(uuidString: child.lastPathComponent)?.uuidString == child.lastPathComponent,
                   let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
@@ -248,9 +378,10 @@ import UniformTypeIdentifiers
             guard let markerValues = try? marker.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
                   markerValues.isRegularFile == true, markerValues.isSymbolicLink != true,
                   (try? String(contentsOf: marker, encoding: .utf8)) == "Luma NativeCache v1" else { continue }
-            try fm.removeItem(at: child)
+            try Safety.validateProjectTree(child)
+            owned.append(child)
         }
-        try removeDirectoryIfEmpty(cacheRoot, fileManager: fm)
+        return owned
     }
     private func validateTree(_ root: URL) throws {
         try Safety.validateProjectTree(root)

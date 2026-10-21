@@ -6,17 +6,21 @@ import CoreVideo
 // Owns the writer used by VideoToolbox's compressed-sample callback. All status
 // checks are bounded; a failed writer cannot leave conversion spinning forever.
 final class CompressedMovieWriter: @unchecked Sendable {
-    private let lock = NSLock()
+    private let lock = NSCondition()
     private let url: URL
     private let transform: CGAffineTransform
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
-    private(set) var failure: Error?
-    private(set) var count = 0
+    private var storedFailure: Error?
+    private var storedCount = 0
+    private var cancelled = false
+    private var finishing = false
+    var failure: Error? { lock.lock(); defer { lock.unlock() }; return storedFailure }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return storedCount }
     init(url: URL, transform: CGAffineTransform) { self.url = url; self.transform = transform }
     func append(_ sample: CMSampleBuffer, status: OSStatus) {
         lock.lock(); defer { lock.unlock() }
-        guard failure == nil else { return }
+        guard storedFailure == nil, !cancelled, !finishing else { return }
         do {
             guard status == noErr, CMSampleBufferDataIsReady(sample) else { throw LumaError("HEVC encoder returned status \(status).") }
             if writer == nil {
@@ -31,31 +35,87 @@ final class CompressedMovieWriter: @unchecked Sendable {
             guard let writer, let input else { throw LumaError("The video writer was not created.") }
             let deadline = Date().addingTimeInterval(15)
             while !input.isReadyForMoreMediaData {
-                guard writer.status == .writing, Date() < deadline else { throw writer.error ?? LumaError("The MOV writer stopped accepting frames.") }
-                Thread.sleep(forTimeInterval: 0.002)
+                guard !cancelled, writer.status == .writing, Date() < deadline else { throw writer.error ?? LumaError("The MOV writer stopped accepting frames.") }
+                _ = lock.wait(until: Date().addingTimeInterval(0.002))
             }
+            guard !cancelled else { throw CancellationError() }
             guard input.append(sample) else { throw writer.error ?? LumaError("Could not append an encoded video frame.") }
-            count += 1
-        } catch { failure = error; writer?.cancelWriting() }
+            storedCount += 1
+        } catch { storedFailure = error; writer?.cancelWriting(); lock.broadcast() }
     }
     func finish() async throws {
+        let (writer, _) = try beginFinishing()
+        await writer.finishWriting()
+        let (wasCancelled, failure) = finishingResult()
+        if wasCancelled { throw CancellationError() }
         if let failure { throw failure }
-        guard let writer, let input, count > 0 else { throw LumaError("No video frames were encoded.") }
-        input.markAsFinished(); await writer.finishWriting()
         guard writer.status == .completed else { throw writer.error ?? LumaError("Finishing the movie failed.") }
     }
-    func cancel() { writer?.cancelWriting() }
+    private func beginFinishing() throws -> (AVAssetWriter, AVAssetWriterInput) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let storedFailure { throw storedFailure }
+        guard !cancelled, let writer, let input, storedCount > 0 else { throw LumaError("No video frames were encoded.") }
+        finishing = true
+        input.markAsFinished()
+        return (writer, input)
+    }
+    private func finishingResult() -> (Bool, Error?) {
+        lock.lock(); defer { lock.unlock() }
+        return (cancelled, storedFailure)
+    }
+    func cancel() {
+        lock.lock(); cancelled = true; lock.broadcast(); let writer = self.writer; lock.unlock()
+        writer?.cancelWriting()
+    }
 }
 
 struct TemporalEncoder {
+    static let maximumFrameCount: Int64 = 2_000_000
+
+    static func dimensions(for size: CGSize) throws -> (width: Int32, height: Int32) {
+        guard size.width.isFinite, size.height.isFinite,
+              size.width >= 1, size.height >= 1, size.width <= 8192, size.height <= 8192 else {
+            throw LumaError("Video dimensions are invalid or exceed 8192 pixels.")
+        }
+        return (Int32(size.width), Int32(size.height))
+    }
+
+    static func frameRate(from nominalRate: Float) -> Int {
+        let roundedRate = nominalRate.isFinite && nominalRate > 0 ? Double(nominalRate.rounded()) : 30.0
+        return Int(max(1.0, min(240.0, roundedRate)))
+    }
+
+    static func frameCount(duration: Double, fps: Int) throws -> Int64 {
+        guard duration.isFinite, duration > 0, (1...240).contains(fps) else {
+            throw LumaError("The video duration or frame rate is invalid.")
+        }
+        let count = duration * Double(fps)
+        guard count.isFinite, count <= Double(maximumFrameCount) else {
+            throw LumaError("The video is too long to convert safely. Luma's conversion limit is 2,000,000 frames.")
+        }
+        return max(1, Int64(count.rounded()))
+    }
+
+    static func frameBoundary(normalizedSeconds: Double, fps: Int, totalFrames: Int64) throws -> Int64 {
+        guard normalizedSeconds.isFinite, fps > 0, totalFrames >= 0 else {
+            throw LumaError("The video contains an invalid presentation timestamp.")
+        }
+        let scaled = normalizedSeconds * Double(fps)
+        guard scaled.isFinite else { return normalizedSeconds.sign == .minus ? 0 : totalFrames }
+        // Clamp in floating point before conversion. Int64(scaled) traps for
+        // finite values outside its representable range.
+        return Int64(min(Double(totalFrames), max(0, scaled.rounded())))
+    }
+
     static func encode(source: URL, output: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
         let asset = AVURLAsset(url: source)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw LumaError("No video track was found.") }
         let size = try await track.load(.naturalSize); let nominalFPS = try await track.load(.nominalFrameRate)
         let transform = try await track.load(.preferredTransform); let duration = try await track.load(.timeRange).duration.seconds
-        let fps = max(1, min(240, nominalFPS.isFinite && nominalFPS > 0 ? Int(nominalFPS.rounded()) : 30))
-        let width = Int32(size.width); let height = Int32(size.height)
-        guard width > 0, height > 0, width <= 8192, height <= 8192 else { throw LumaError("Video dimensions are invalid or exceed 8192 pixels.") }
+        let fps = Self.frameRate(from: nominalFPS)
+        let videoSize = try Self.dimensions(for: size)
+        let width = videoSize.width, height = videoSize.height
         let sink = CompressedMovieWriter(url: output, transform: transform)
         var session: VTCompressionSession?
         let callback: VTCompressionOutputCallback = { pointer, _, status, _, sample in
@@ -85,11 +145,9 @@ struct TemporalEncoder {
         guard VTCompressionSessionPrepareToEncodeFrames(session) == noErr else { throw LumaError("The temporal HEVC encoder could not prepare.") }
         let reader = try AVAssetReader(asset: asset)
         let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange])
-        readerOutput.alwaysCopiesSampleData = false
         guard reader.canAdd(readerOutput) else { throw LumaError("The source cannot be decoded to 10-bit frames.") }
-        reader.add(readerOutput); guard reader.startReading() else { throw reader.error ?? LumaError("Could not read the video.") }
         guard duration.isFinite, duration > 0 else { throw LumaError("The video track has no finite duration.") }
-        let totalFrames = max(1, Int64((duration * Double(fps)).rounded()))
+        let totalFrames = try Self.frameCount(duration: duration, fps: fps)
         var index: Int64 = 0
         var firstPTS: CMTime?
         var previousBuffer: CVPixelBuffer?
@@ -101,19 +159,48 @@ struct TemporalEncoder {
             index += 1
             if index % 15 == 0 { progress(min(0.98, Double(index) / Double(totalFrames))) }
         }
-        do {
-            while let sample = readerOutput.copyNextSampleBuffer() {
-                try Task.checkCancellation()
-                if let failure = sink.failure { throw failure }
-                guard let buffer = CMSampleBufferGetImageBuffer(sample) else { throw LumaError("A decoded frame had no image buffer.") }
-                let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-                if firstPTS == nil { firstPTS = pts }
-                let normalized = CMTimeSubtract(pts, firstPTS!).seconds
-                if let previousBuffer, normalized.isFinite {
-                    let boundary = min(totalFrames, max(0, Int64((normalized * Double(fps)).rounded())))
-                    while index < boundary { try encodeFrame(previousBuffer) }
+        func consumeFrame(_ buffer: CVPixelBuffer, presentationTime: CMTime) throws {
+            try Task.checkCancellation()
+            if let failure = sink.failure { throw failure }
+            if firstPTS == nil { firstPTS = presentationTime }
+            let normalized = CMTimeSubtract(presentationTime, firstPTS!).seconds
+            guard presentationTime.isValid, presentationTime.isNumeric, normalized.isFinite else {
+                throw LumaError("The video contains an invalid presentation timestamp.")
+            }
+            if let previousBuffer {
+                let boundary = try Self.frameBoundary(normalizedSeconds: normalized, fps: fps, totalFrames: totalFrames)
+                while index < boundary { try encodeFrame(previousBuffer) }
+            }
+            previousBuffer = buffer
+        }
+        @available(macOS 26.0, *)
+        func readUsingProvider() async throws {
+            let provider = reader.outputProvider(for: readerOutput)
+            try reader.start()
+            while let sample = try await provider.next() {
+                guard let pixelSample = CMReadySampleBuffer<CVReadOnlyPixelBuffer>(sample) else {
+                    throw LumaError("The video reader returned a frame without decoded pixels.")
                 }
-                previousBuffer = buffer
+                try pixelSample.content.withUnsafeBuffer { buffer in
+                    try consumeFrame(buffer, presentationTime: pixelSample.presentationTimeStamp)
+                }
+            }
+        }
+        @available(macOS, introduced: 14.0, deprecated: 27.0, message: "Use AVAssetReaderOutput.Provider.next()")
+        func readUsingLegacyOutput() throws {
+            readerOutput.alwaysCopiesSampleData = false
+            reader.add(readerOutput)
+            guard reader.startReading() else { throw reader.error ?? LumaError("Could not read the video.") }
+            while let sample = readerOutput.copyNextSampleBuffer() {
+                guard let buffer = CMSampleBufferGetImageBuffer(sample) else { throw LumaError("A decoded frame had no image buffer.") }
+                try consumeFrame(buffer, presentationTime: CMSampleBufferGetPresentationTimeStamp(sample))
+            }
+        }
+        do {
+            if #available(macOS 26.0, *) {
+                try await readUsingProvider()
+            } else {
+                try readUsingLegacyOutput()
             }
             guard reader.status == .completed else { throw reader.error ?? LumaError("Video decoding was interrupted.") }
             if let previousBuffer { while index < totalFrames { try encodeFrame(previousBuffer) } }
@@ -130,6 +217,12 @@ struct TemporalEncoder {
 
 @MainActor final class SceneMovieExporter {
     static func export(host: SceneHost, output: URL, seconds: Int, fps: Int, width: Int, height: Int, progress: (Double) -> Void) async throws {
+        let (frameCount, overflow) = seconds.multipliedReportingOverflow(by: fps)
+        guard (1...600).contains(seconds), (1...240).contains(fps), !overflow, frameCount <= 36_000,
+              (1...8192).contains(width), (1...8192).contains(height),
+              width.multipliedReportingOverflow(by: height).overflow == false, width * height <= 16_777_216 else {
+            throw LumaError("Scene export settings exceed Luma's 10-minute, 36,000-frame, or 16-megapixel limits.")
+        }
         let writer = try AVAssetWriter(outputURL: output, fileType: .mov)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey:width, AVVideoHeightKey:height])
         guard writer.canAdd(input) else { throw LumaError("The scene video encoder is unavailable.") }

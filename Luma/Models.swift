@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 enum WallpaperKind: String, Codable, CaseIterable { case video, scene, web, image }
 enum FitMode: String, Codable, CaseIterable { case cover, contain, stretch }
@@ -35,6 +36,14 @@ struct DisplayConfiguration: Codable, Equatable {
     var offsetY = 0.0
     var volume = 0.0
     var speed = 1.0
+
+    mutating func normalizeForRuntime() {
+        volume = volume.isFinite ? min(1, max(0, volume)) : 0
+        speed = speed.isFinite ? min(4, max(0.1, speed)) : 1
+        scale = scale.isFinite ? min(4, max(0.1, scale)) : 1
+        offsetX = offsetX.isFinite ? min(100_000, max(-100_000, offsetX)) : 0
+        offsetY = offsetY.isFinite ? min(100_000, max(-100_000, offsetY)) : 0
+    }
 }
 struct AppPreferences: Codable {
     var pauseOnBattery = false
@@ -57,6 +66,14 @@ struct AppPreferences: Codable {
     var scheduleEnabled = false
     var syncDesktopStill = false
     var mouseParallax = true
+
+    mutating func normalizeForRuntime() {
+        cpuThreshold = cpuThreshold.isFinite ? min(99, max(50, cpuThreshold)) : 85
+        playlistSeconds = playlistSeconds.isFinite ? min(86_400, max(60, playlistSeconds)) : 300
+        if ![24, 30, 60].contains(sceneFPS) { sceneFPS = 30 }
+        dayHour = min(23, max(0, dayHour))
+        nightHour = min(23, max(0, nightHour))
+    }
 }
 struct SavedLibrary: Codable {
     var version = 1
@@ -71,10 +88,13 @@ struct LumaError: LocalizedError {
 }
 enum Safety {
     static func validateDirectoryIfPresent(_ url: URL) throws {
-        let attributes: [FileAttributeKey: Any]
-        do { attributes = try FileManager.default.attributesOfItem(atPath: url.path) }
-        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return }
-        guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+        var metadata = stat()
+        let result = url.path.withCString { Darwin.lstat($0, &metadata) }
+        if result != 0 {
+            if Darwin.errno == ENOENT || Darwin.errno == ENOTDIR { return }
+            throw LumaError("Cannot inspect directory \(url.path): \(String(cString: strerror(Darwin.errno))).")
+        }
+        guard metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
             throw LumaError("\(url.path) is not a real managed directory. It was left untouched.")
         }
     }
@@ -100,6 +120,7 @@ enum Safety {
         let normalized = relative.replacingOccurrences(of: "\\", with: "/")
         guard !normalized.isEmpty, !normalized.hasPrefix("/"), !normalized.contains("\0"),
               !normalized.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }) else { throw LumaError("The project contains an unsafe path: \(relative)") }
+        try validateDirectoryIfPresent(root)
         let base = root.resolvingSymlinksInPath().standardizedFileURL
         var candidate = base
         for component in normalized.split(separator: "/") {

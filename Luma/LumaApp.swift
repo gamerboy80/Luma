@@ -91,10 +91,21 @@ struct ClearDataPlan {
     }
     func chooseAssets() {
         do {
-            guard let url = try Bookmark.chooseFolder(message: "Choose the assets folder from your own Wallpaper Engine installation (steamapps/common/wallpaper_engine/assets). These resources are used only on this Mac.", defaultsKey: "engine-assets") else { return }
-            guard FileManager.default.fileExists(atPath: url.appendingPathComponent("materials").path) else { library.error = "Choose the assets folder containing materials, shaders, and fonts."; return }
+            let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
+            panel.message = "Choose the assets folder from your own Wallpaper Engine installation (steamapps/common/wallpaper_engine/assets). These resources are used only on this Mac."
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            let materialsURL = url.appendingPathComponent("materials", isDirectory: true)
+            let materials = try materialsURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true,
+                  materials.isDirectory == true, materials.isSymbolicLink != true else {
+                throw LumaError("Choose the assets folder containing a real materials folder. The previous selection was kept.")
+            }
+            let bookmark = try Bookmark.create(url)
+            let hasScopedAccess = url.startAccessingSecurityScopedResource()
             assetsAccess?.stopAccessingSecurityScopedResource()
-            if url.startAccessingSecurityScopedResource() { assetsAccess = url }
+            assetsAccess = hasScopedAccess ? url : nil
+            UserDefaults.standard.set(bookmark, forKey: "engine-assets")
             desktop.assetsURL = url
             for screen in desktop.screens { desktop.retry(screen.persistentID) }
         } catch { library.error = error.localizedDescription }
@@ -102,23 +113,45 @@ struct ClearDataPlan {
     func clearDataPlan() -> ClearDataPlan {
         let fm = FileManager.default
         let root = library.root
-        let customCount = library.state.wallpapers.filter { !$0.isBuiltIn }.count
-        var remove = ["\(root.appendingPathComponent("Media").path) — removes \(customCount) imported or downloaded wallpaper folders and Luma Original copies listed in Luma's library. Unrecognized entries are preserved.",
-                      "\(root.appendingPathComponent("library.json").path) — removes preferences, favorites, playlists, and display assignments. Luma quits after clearing and does not recreate its library during shutdown; reopening it later creates a fresh default library.",
-                      "The Luma application support folder is removed only if it is empty after the listed cleanup. Unrecognized files are preserved. The Luma app itself stays installed."]
+        let mediaPath = root.appendingPathComponent("Media").path
+        let libraryPath = root.appendingPathComponent("library.json").path
+        var remove: [String]
+        if let count = library.clearDataWallpaperCount {
+            remove = ["\(mediaPath) — removes up to \(count) imported or downloaded wallpaper folders and Luma Original copies listed in the valid library. Unknown entries are preserved; unsafe contents abort cleanup before other changes.",
+                      "\(libraryPath) — removes preferences, favorites, playlists, and display assignments after path checks. Luma quits without recreating its library during shutdown; reopening later creates a fresh default library."]
+        } else {
+            remove = ["\(mediaPath) and \(libraryPath) — Luma cannot safely determine library ownership. It will preserve them and abort before changing playback or system state."]
+        }
+        let nativeIssue = native.clearDataPreflightError
+        remove.append("The Luma application support folder is removed only if it is empty after successful cleanup. Unrecognized files are preserved. The Luma app itself stays installed.")
         let desktopStills = root.appendingPathComponent("DesktopStills", isDirectory: true)
         if fm.fileExists(atPath: desktopStills.path) { remove.append("\(desktopStills.path) — removes recorded Luma desktop stills and its ownership record after restoring the previous wallpaper. Other files are preserved.") }
         let nativeCache = root.appendingPathComponent("NativeCache", isDirectory: true)
         if fm.fileExists(atPath: nativeCache.path) { remove.append("\(nativeCache.path) — removes temporary export folders carrying Luma's ownership marker. Other entries are preserved.") }
         let editorProjects = root.appendingPathComponent("EditorProjects", isDirectory: true)
-        if fm.fileExists(atPath: editorProjects.path) { remove.append("\(editorProjects.path) — removes \(self.editorProjects.projects.count) editor projects created or imported into Luma and their copied assets. Unknown entries are preserved.") }
-        let fallbackImage = root.appendingPathComponent("LockScreenFallbacks/lock-screen-still.png")
-        if fm.fileExists(atPath: fallbackImage.path) { remove.append("\(fallbackImage.path) — removes the static lock-screen preview created by Luma after disabling the experimental overlay.") }
+        if fm.fileExists(atPath: editorProjects.path) {
+            if let count = self.editorProjects.clearDataProjectCount {
+                remove.append("\(editorProjects.path) — removes up to \(count) UUID project folders recorded in Luma's valid ownership index and their copied assets after path and symlink checks. Already missing folders and unindexed entries are preserved; unsafe contents stop cleanup before other changes.")
+            } else {
+                remove.append("\(editorProjects.path) — the project index or an indexed path is unreadable or unsafe. Luma will preserve it and abort before restoring or removing other data.")
+            }
+        }
+        let fallbackDirectory = root.appendingPathComponent("LockScreenFallbacks", isDirectory: true)
+        if fm.fileExists(atPath: fallbackDirectory.path) {
+            if nativeIssue == nil { remove.append("\(fallbackDirectory.path) — removes the Luma-marked static lock-screen fallback and marker. Unknown files are preserved.") }
+            else { remove.append("\(fallbackDirectory.path) — preserved because Luma could not verify its ownership marker; Clear Data will abort before changing playback or system state.") }
+        }
         let nativeBackups = root.appendingPathComponent("NativeBackups", isDirectory: true)
-        if fm.fileExists(atPath: nativeBackups.path) { remove.append("\(nativeBackups.path) — removes Luma's recorded wallpaper catalog snapshots and selection backups after restoration. Other entries are preserved.") }
+        if fm.fileExists(atPath: nativeBackups.path) {
+            if nativeIssue == nil { remove.append("\(nativeBackups.path) — removes Luma's validated wallpaper catalog snapshots and selection backups after restoration. Unknown entries are preserved.") }
+            else { remove.append("\(nativeBackups.path) — preserved because Luma could not verify its ownership records; Clear Data will abort before changing playback or system state.") }
+        }
         let receipt = root.appendingPathComponent("native-receipt.json")
-        if fm.fileExists(atPath: receipt.path) { remove.append("\(receipt.path) — Luma's native wallpaper install record.") }
-        remove.append("Luma's saved SteamCMD, Wallpaper Engine assets, and native wallpaper folder bookmarks in Luma's settings.")
+        if fm.fileExists(atPath: receipt.path) {
+            if nativeIssue == nil { remove.append("\(receipt.path) — removes Luma's validated native wallpaper install record after restoring managed changes.") }
+            else { remove.append("\(receipt.path) — preserved because Luma could not verify the receipt; Clear Data will abort before changing playback or system state.") }
+        }
+        remove.append("Luma's saved SteamCMD, Wallpaper Engine assets, and native wallpaper folder bookmarks, plus the static fallback source label, in Luma's settings.")
         if FileManager.default.fileExists(atPath: Bookmark.legacyPreferencesURL.path) {
             remove.append("The same three Luma bookmark values in the old Luma preferences file; other values in that file are preserved.")
         }
@@ -126,6 +159,9 @@ struct ClearDataPlan {
         remove.append("Luma's saved Music/Spotify metadata source and track metadata held in memory. Metadata polling stops. macOS Automation grants are managed by macOS; revoke Luma there in System Settings → Privacy & Security → Automation if desired.")
 
         var restore = desktop.clearDataRestorePlan() + native.clearDataRestorePlan()
+        if let issue = desktop.clearDataPreflightError {
+            restore.append("Clear Data will abort before changing system wallpapers because the desktop-still ownership record cannot be verified: \(issue)")
+        }
         if lockOverlay.enabled { restore.append("Stop Luma's experimental lock-screen windows and remove the private SkyLight space.") }
         if let login = LaunchAtLoginBaseline.clearDataDescription { restore.append(login) }
         if restore.isEmpty { restore.append("No recorded desktop image, native wallpaper selection, or launch-at-login change needs restoring.") }
@@ -133,9 +169,17 @@ struct ClearDataPlan {
         return ClearDataPlan(remove: remove, restore: restore)
     }
     func clearLumaData() async throws {
-        guard !steam.running, !native.busy, library.activity == nil, !library.hasDownloadInProgress else {
+        guard !steam.running, !native.busy, library.activity == nil, !library.hasDownloadInProgress, !library.hasImportInProgress else {
             throw LumaError("Wait for downloads, imports, or native wallpaper exports to finish before clearing Luma data.")
         }
+        // Validate every local data ownership record before stopping playback
+        // or restoring system state, so malformed indexes and unsafe paths do
+        // not cause a partial clear.
+        try library.validateForClearData()
+        try editorProjects.validateManagedProjectsForClear()
+        try desktop.validateForClearData()
+        try native.validateForClearData()
+        try Bookmark.preflightSavedBookmarksForClear()
         desktop.beginClearData()
         SceneMediaProvider.shared.stop(clearPreference: true)
         do {
@@ -274,7 +318,7 @@ struct ClearDataPlan {
     private func openOrFocusLibraryWindow() {
         NSApp.setActivationPolicy(.regular)
         NSApp.unhide(nil)
-        if let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) && ($0.isVisible || $0.isMiniaturized) }) {
+        if let window = LumaWindowIdentity.libraryWindow(in: NSApp.windows) {
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
         } else if let openLibraryWindow {
@@ -286,7 +330,7 @@ struct ClearDataPlan {
         scheduleDockPolicyUpdate()
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
             guard let self,
-                  let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) && ($0.isVisible || $0.isMiniaturized) }) else { return }
+                  let window = LumaWindowIdentity.libraryWindow(in: NSApp.windows) else { return }
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
             self.scheduleDockPolicyUpdate()
@@ -380,7 +424,7 @@ struct LibraryCommands: Commands {
     static func openLibrary(_ openWindow: OpenWindowAction) {
         NSApp.setActivationPolicy(.regular)
         NSApp.unhide(nil)
-        let existing = NSApp.windows.first { $0.styleMask.contains(.titled) && ($0.isVisible || $0.isMiniaturized) }
+        let existing = LumaWindowIdentity.libraryWindow(in: NSApp.windows)
         if let existing {
             if existing.isMiniaturized { existing.deminiaturize(nil) }
             existing.makeKeyAndOrderFront(nil)
@@ -389,7 +433,7 @@ struct LibraryCommands: Commands {
         }
         NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) {
-            if let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) && ($0.isVisible || $0.isMiniaturized) }) {
+            if let window = LumaWindowIdentity.libraryWindow(in: NSApp.windows) {
                 if window.isMiniaturized { window.deminiaturize(nil) }
                 window.makeKeyAndOrderFront(nil)
             }

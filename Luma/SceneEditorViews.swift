@@ -17,6 +17,7 @@ struct SceneEditorHomeView: View {
     @State private var search = ""
     @State private var renameProject: EditorProject?
     @State private var renameValue = ""
+    @State private var exportStatus: String?
 
     private var filtered: [EditorProject] { store.projects.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) } }
     private var recent: [EditorProject] { store.recentProjectIDs.compactMap { id in filtered.first { $0.id == id } } }
@@ -34,6 +35,7 @@ struct SceneEditorHomeView: View {
                 Button { createProject() } label: { Label("New Scene", systemImage: "plus") }.buttonStyle(.borderedProminent).tint(editorAccent).foregroundStyle(.black)
                 Button { importProject() } label: { Label("Import", systemImage: "square.and.arrow.down") }
             }.padding(22)
+            if let exportStatus { Label(exportStatus, systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 22) }
             Divider().opacity(0.45)
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -107,7 +109,15 @@ struct SceneEditorHomeView: View {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true; panel.message = "Choose a folder for a copy of this project."
         if panel.runModal() == .OK, let url = panel.url {
             let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-            perform { let result = try store.export(project.id, to: url); library.activity = "Exported to \(result.lastPathComponent)" }
+            perform {
+                let result = try store.export(project.id, to: url)
+                let message = "Exported to \(result.lastPathComponent)"
+                exportStatus = message
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(4))
+                    if exportStatus == message { exportStatus = nil }
+                }
+            }
         }
     }
     private func perform(_ action: () throws -> Void) { do { try action() } catch { library.error = error.localizedDescription } }
@@ -139,6 +149,7 @@ struct SceneEditorHomeView: View {
     let projectID: UUID
     private var scriptToggleRequest = UUID()
     private var lastDiagnosticPoll = Date.distantPast
+    private var rendererGeneration: UInt64 = 0
     var title: String { document?.title ?? project.title }
 
     init(store: EditorProjectStore, library: LibraryStore, project: EditorProject, assets: URL?, preferences: AppPreferences) {
@@ -148,12 +159,15 @@ struct SceneEditorHomeView: View {
     }
 
     func attach(_ host: SceneHost) {
+        rendererGeneration &+= 1
+        let generation = rendererGeneration
         self.host = host
         host.ready = { [weak self, weak host] in
             guard let self, let host else { return }
             self.status = "Preview ready"
             Task {
                 await host.editorSeek(self.previewTime)
+                guard self.host === host, self.rendererGeneration == generation else { return }
                 host.editorSetPreviewQuality(antiAliasing: self.previewAntiAliasing, particles: self.previewParticles, postProcessing: self.previewPostProcessing)
                 host.setPlaying(self.isPlaying)
                 await self.refreshRenderer()
@@ -162,22 +176,31 @@ struct SceneEditorHomeView: View {
         host.failed = { [weak self] message in self?.status = "Preview error: \(message)" }
         host.diagnostic = { [weak self] message in self?.status = message }
     }
-    func detach(_ host: SceneHost) { if self.host === host { self.host = nil; rendererAvailable = false; rendererLayers = [] } }
+    func detach(_ host: SceneHost) { if self.host === host { rendererGeneration &+= 1; self.host = nil; rendererAvailable = false; rendererLayers = [] } }
     func refreshRenderer() async {
         guard let host else { return }
-        rendererAvailable = await host.editorAvailable()
-        if rendererAvailable { rendererLayers = (try? await host.editorLayers()) ?? [] }
-        previewTime = await host.editorTime()
-        scriptDiagnostics = await host.editorScriptDiagnostics()
-        skippedScriptCount = await host.editorSkippedScriptCount()
+        let generation = rendererGeneration
+        let available = await host.editorAvailable()
+        let layers = available ? (try? await host.editorLayers()) ?? [] : []
+        let time = await host.editorTime()
+        let diagnostics = await host.editorScriptDiagnostics()
+        let skipped = await host.editorSkippedScriptCount()
+        guard self.host === host, rendererGeneration == generation else { return }
+        rendererAvailable = available; rendererLayers = layers; previewTime = time
+        scriptDiagnostics = diagnostics; skippedScriptCount = skipped
         lastDiagnosticPoll = Date()
     }
     func tick() async {
         guard let host else { return }
-        if isPlaying { previewTime = await host.editorTime() }
+        let generation = rendererGeneration
+        let time = isPlaying ? await host.editorTime() : previewTime
+        guard self.host === host, rendererGeneration == generation else { return }
+        if isPlaying { previewTime = time }
         guard Date().timeIntervalSince(lastDiagnosticPoll) >= 1 else { return }
-        scriptDiagnostics = await host.editorScriptDiagnostics()
-        skippedScriptCount = await host.editorSkippedScriptCount()
+        let diagnostics = await host.editorScriptDiagnostics()
+        let skipped = await host.editorSkippedScriptCount()
+        guard self.host === host, rendererGeneration == generation else { return }
+        scriptDiagnostics = diagnostics; skippedScriptCount = skipped
         lastDiagnosticPoll = Date()
     }
     func select(_ index: Int, extending: Bool) {
@@ -192,7 +215,18 @@ struct SceneEditorHomeView: View {
     }
     func hitTest(x: Double, y: Double, extending: Bool) {
         guard let host else { return }
-        Task { do { selectRendererIDs(try await host.editorHitTest(x: x, y: y), extending: extending) } catch { status = error.localizedDescription } }
+        let generation = rendererGeneration
+        Task { [weak self, weak host] in
+            guard let self, let host else { return }
+            do {
+                let ids = try await host.editorHitTest(x: x, y: y)
+                guard self.host === host, self.rendererGeneration == generation else { return }
+                self.selectRendererIDs(ids, extending: extending)
+            } catch {
+                guard self.host === host, self.rendererGeneration == generation else { return }
+                self.status = error.localizedDescription
+            }
+        }
     }
     func layerJSON(_ index: Int) -> String { guard let document, document.objects.indices.contains(index), JSONSerialization.isValidJSONObject(document.objects[index]), let bytes = try? JSONSerialization.data(withJSONObject: document.objects[index], options: [.prettyPrinted, .sortedKeys]), let string = String(data: bytes, encoding: .utf8) else { return "{}" }; return string }
     func generalJSON() -> String { guard let general = document?.scene["general"] as? [String: Any], JSONSerialization.isValidJSONObject(general), let bytes = try? JSONSerialization.data(withJSONObject: general, options: [.prettyPrinted, .sortedKeys]) else { return "{}" }; return String(decoding: bytes, as: UTF8.self) }
@@ -228,8 +262,17 @@ struct SceneEditorHomeView: View {
         guard let document else { return }
         let hadApproval = project.scriptsApproved || project.scriptsEnabled
         scriptToggleRequest = UUID()
-        try document.save()
+        let previousProjects = store.projects
+        let previousRecents = store.recentProjectIDs
         try store.update(projectID) { item in item.title = document.title; item.entry = document.entry; item.scriptApprovalFingerprint = nil; item.scriptsEnabled = false }
+        do {
+            try document.save()
+        } catch {
+            let saveError = error.localizedDescription
+            do { try store.restoreStoreSnapshot(projects: previousProjects, recents: previousRecents) }
+            catch { throw LumaError("The project edit could not be saved: \(saveError). Restoring its editor index also failed: \(error.localizedDescription). Reopen this project and review its contents.") }
+            throw error
+        }
         project = store.projects.first(where: { $0.id == projectID }) ?? project
         status = hadApproval ? "Project saved · script approval cleared because project contents changed" : "Project saved"
         previewGeneration += 1; documentRevision += 1; rendererAvailable = false; rendererLayers = []; objectWillChange.send()
@@ -293,8 +336,28 @@ struct SceneEditorHomeView: View {
     }
     func playPause() { isPlaying.toggle(); host?.setPlaying(isPlaying) }
     func applyPreviewQuality() { host?.editorSetPreviewQuality(antiAliasing: previewAntiAliasing, particles: previewParticles, postProcessing: previewPostProcessing) }
-    func seek(_ time: Double) { previewTime = time; guard let host else { return }; Task { await host.editorSeek(time) } }
-    func step(_ frame: Int, fps: Int) { host?.editorStep(frame, fps: fps); Task { try? await Task.sleep(for: .milliseconds(40)); previewTime = await host?.editorTime() ?? previewTime } }
+    func seek(_ time: Double) {
+        previewTime = time
+        guard let host else { return }
+        let generation = rendererGeneration
+        Task {
+            guard self.host === host, self.rendererGeneration == generation else { return }
+            await host.editorSeek(time)
+            guard self.host === host, self.rendererGeneration == generation else { return }
+        }
+    }
+    func step(_ frame: Int, fps: Int) {
+        guard let host else { return }
+        let generation = rendererGeneration
+        host.editorStep(frame, fps: fps)
+        Task {
+            try? await Task.sleep(for: .milliseconds(40))
+            guard self.host === host, self.rendererGeneration == generation else { return }
+            let time = await host.editorTime()
+            guard self.host === host, self.rendererGeneration == generation else { return }
+            previewTime = time
+        }
+    }
 }
 
 struct SceneEditorWorkspace: View {
@@ -614,7 +677,7 @@ private struct LayerJSONEditor: View {
                 }
                 GridRow { TextField("Rotation °", text: $rotation).textFieldStyle(.roundedBorder).gridCellColumns(2) }
             }.font(.system(size: 9))
-            if let text = layer["text"] as? String {
+            if layer["text"] is String {
                 Text("Text").font(.system(size: 9)).foregroundStyle(.secondary)
                 TextEditor(text: $textValue).font(.system(size: 10)).frame(height: 56).scrollContentBackground(.hidden).padding(4).background(.black.opacity(0.2), in: RoundedRectangle(cornerRadius: 6)).onChange(of: textValue) { _, value in patchDraft("text", value) }
                 TextField("Font", text: $font).onChange(of: font) { _, value in patchDraft("font", value) }

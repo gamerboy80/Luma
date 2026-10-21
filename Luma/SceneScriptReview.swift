@@ -12,6 +12,7 @@ struct SceneScriptReview: Sendable {
     var sources: [SceneScriptSource] = []
     var issues: [String] = []
     var fingerprint = ""
+    var resourceFingerprints: [String: String] = [:]
     var canApprove: Bool { !sources.isEmpty && issues.isEmpty }
 
     // This reads source as data. It never creates a renderer or evaluates code.
@@ -93,13 +94,16 @@ struct SceneScriptReview: Sendable {
                 if ext == "pkg" {
                     guard (info.fileSize ?? Int.max) <= 2 * 1024 * 1024 * 1024 else { throw LumaError("\(relative) is too large to inspect.") }
                     let archive = try Data(contentsOf: file, options: .mappedIfSafe)
+                    review.resourceFingerprints[relative] = SHA256.hash(data: archive).map { String(format: "%02x", $0) }.joined()
                     for item in try SceneMediaDiscovery.archiveEntries(archive).sorted(by: { $0.name < $1.name }) where item.ext == "json" || scriptExtensions.contains(item.ext) {
                         guard (item.range?.count ?? Int.max) <= 8 * 1024 * 1024 else { throw LumaError("\(relative) → \(item.name) is too large to review.") }
                         try consume(item.bytes(), name: relative + " → " + item.name)
                     }
                 } else if ext == "json" || scriptExtensions.contains(ext) {
                     guard (info.fileSize ?? Int.max) <= 8 * 1024 * 1024 else { throw LumaError("\(relative) is too large to review.") }
-                    try consume(Data(contentsOf: file), name: relative)
+                    let bytes = try Data(contentsOf: file)
+                    review.resourceFingerprints[relative] = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+                    try consume(bytes, name: relative)
                 }
             } catch is CancellationError { throw CancellationError() }
             catch { review.issues.append("\(relative): \(error.localizedDescription)") }

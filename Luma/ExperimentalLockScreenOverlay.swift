@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Darwin
 import Foundation
+import CryptoKit
 
 /// A private-API experiment. macOS does not promise that a third-party window
 /// will remain visible or animate on the authenticated lock screen.
@@ -22,6 +23,7 @@ import Foundation
     private var sleeping = false
     private var shuttingDown = false
     private var activeWallpaper: Wallpaper?
+    private var activeConfigurationIdentity: String?
 
     init(library: LibraryStore, assets: @escaping () -> URL?) {
         self.library = library
@@ -130,7 +132,8 @@ import Foundation
             status = "The scene was removed from Luma's library; the overlay was disabled."
             return
         }
-        guard renderIdentity(activeWallpaper) != renderIdentity(wallpaper) else { return }
+        guard renderIdentity(activeWallpaper) != renderIdentity(wallpaper)
+                || activeConfigurationIdentity != configurationIdentity() else { return }
         do {
             try build(for: wallpaper)
             status = "Overlay refreshed for the current scene and script approval."
@@ -145,6 +148,16 @@ import Foundation
         guard let wallpaper else { return nil }
         return [wallpaper.id.uuidString, wallpaper.folder, wallpaper.entry, wallpaper.preview ?? "", wallpaper.propertiesJSON,
                 String(wallpaper.trustedScripts), wallpaper.scriptApprovalFingerprint ?? ""].joined(separator: "\u{1f}")
+    }
+
+    private func configurationIdentity() -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let preferences = (try? encoder.encode(library.state.preferences)).map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "invalid"
+        let displays = library.state.displays.keys.sorted().compactMap { key -> String? in
+            guard let config = library.state.displays[key], let data = try? encoder.encode(config) else { return nil }
+            return "\(key):\(SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())"
+        }.joined(separator: "|")
+        return "\(preferences)|\(displays)|\(assets()?.standardizedFileURL.path ?? "")"
     }
 
     private func build(for wallpaper: Wallpaper) throws {
@@ -166,11 +179,13 @@ import Foundation
             }
             surfaces = newSurfaces
             activeWallpaper = wallpaper
+            activeConfigurationIdentity = configurationIdentity()
             updateVisibility()
         } catch {
             for surface in newSurfaces.values { surface.stop() }
             surfaces.removeAll()
             activeWallpaper = nil
+            activeConfigurationIdentity = nil
             let cleanupError = space.remove()
             privateSpace = cleanupError == nil ? nil : space
             throw LumaError(cleanupError.map { "\(error.localizedDescription) SkyLight cleanup also failed: \($0)" } ?? error.localizedDescription)
@@ -210,6 +225,7 @@ import Foundation
         for surface in surfaces.values { surface.stop() }
         surfaces.removeAll()
         activeWallpaper = nil
+        activeConfigurationIdentity = nil
         let result = privateSpace?.remove()
         if result == nil { privateSpace = nil }
         return result

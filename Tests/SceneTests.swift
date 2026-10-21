@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import AVFoundation
+import CryptoKit
 
 @main struct SceneTests {
     @MainActor static func main() {
@@ -35,7 +36,7 @@ import AVFoundation
         var error:String?
         host.failed={error=$0};host.diagnostic={print("Scene diagnostic:",$0)}
         let deadline=Date().addingTimeInterval(40)
-        while !host.didBecomeReady {if let error{throw LumaError(error)};guard Date()<deadline else {throw LumaError("No scene frame arrived")};try await Task.sleep(for:.milliseconds(100))}
+        while !host.didBecomeReady {if let error{throw LumaError(error)};guard Date()<deadline else {throw LumaError("No scene frame arrived (pageLoaded=\(host.pageLoaded), webViewLoading=\(host.webView.isLoading), url=\(host.webView.url?.absoluteString ?? "none"), rendererError=\(error ?? "none")).")};try await Task.sleep(for:.milliseconds(100))}
         guard await host.editorAvailable() else { throw LumaError("The bundled WebWallGL editor API did not attach to a scene preview.") }
         let editorLayers = try await host.editorLayers()
         guard editorLayers.count == 1 else { throw LumaError("The editor API did not return the fixture layer.") }
@@ -55,10 +56,50 @@ import AVFoundation
         host.editorSetPreviewQuality(antiAliasing: "fxaa", particles: "medium", postProcessing: "low")
         try await Task.sleep(for: .milliseconds(100))
         let frame=try await host.capture(time:0,width:320,height:180)
-        guard let bitmap=NSBitmapImageRep(data:frame),bitmap.pixelsWide == 320,bitmap.pixelsHigh == 180 else {throw LumaError("Scene frame dimensions are wrong")}
+        guard let bitmap=NSBitmapImageRep(data:frame) else { throw LumaError("Scene capture did not return a decodable image (\(frame.count) bytes).") }
+        guard bitmap.pixelsWide == 320,bitmap.pixelsHigh == 180 else {throw LumaError("Scene frame dimensions are wrong: got \(bitmap.pixelsWide)×\(bitmap.pixelsHigh), expected 320×180 (\(frame.count) PNG bytes).")}
+        do {
+            _ = try await host.capture(time: 0, width: 0, height: 180)
+            throw LumaError("Scene capture accepted a zero-width frame.")
+        } catch let error as LumaError {
+            guard error.message.contains("dimensions") else { throw error }
+        }
+        do {
+            _ = try await host.capture(time: .infinity, width: 320, height: 180)
+            throw LumaError("Scene capture accepted a nonfinite timestamp.")
+        } catch let error as LumaError {
+            guard error.message.contains("capture time") else { throw error }
+        }
+        _ = try await host.webView.callAsyncJavaScript("window.__lumaOriginalCapture=window.lumaCapture;const c=document.createElement('canvas');c.width=64;c.height=36;const ctx=c.getContext('2d');ctx.fillStyle='#e02020';ctx.fillRect(0,0,64,18);ctx.fillStyle='#2040e0';ctx.fillRect(0,18,64,18);window.__lumaPatternCapture=c.toDataURL('image/png');window.lumaCapture=async()=>window.__lumaPatternCapture;return true", arguments: [:], in: nil, contentWorld: .page)
+        let normalizedFrame = try await host.capture(time: 0, width: 320, height: 180)
+        guard let normalizedBitmap = NSBitmapImageRep(data: normalizedFrame), normalizedBitmap.pixelsWide == 320, normalizedBitmap.pixelsHigh == 180 else {
+            let actual = NSBitmapImageRep(data: normalizedFrame).map { "\($0.pixelsWide)×\($0.pixelsHigh)" } ?? "unreadable"
+            throw LumaError("Host capture normalization returned \(actual), expected 320×180.")
+        }
+        let sourcePatternValue = try await host.webView.callAsyncJavaScript("return window.__lumaPatternCapture", arguments: [:], in: nil, contentWorld: .page)
+        guard let sourcePatternURL = sourcePatternValue as? String,
+              let patternComma = sourcePatternURL.firstIndex(of: ","),
+              let sourcePatternData = Data(base64Encoded: String(sourcePatternURL[sourcePatternURL.index(after: patternComma)...])),
+              let sourcePattern = NSBitmapImageRep(data: sourcePatternData),
+              let sourceTop = sourcePattern.colorAt(x: 32, y: 9)?.usingColorSpace(.deviceRGB),
+              let sourceBottom = sourcePattern.colorAt(x: 32, y: 27)?.usingColorSpace(.deviceRGB),
+              let normalizedTop = normalizedBitmap.colorAt(x: 160, y: 45)?.usingColorSpace(.deviceRGB),
+              let normalizedBottom = normalizedBitmap.colorAt(x: 160, y: 135)?.usingColorSpace(.deviceRGB) else {
+            throw LumaError("Scene capture orientation fixture could not decode its color samples.")
+        }
+        func colorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
+            abs(lhs.redComponent - rhs.redComponent) + abs(lhs.greenComponent - rhs.greenComponent) + abs(lhs.blueComponent - rhs.blueComponent)
+        }
+        guard colorDistance(sourceTop, sourceBottom) > 1,
+              colorDistance(sourceTop, normalizedTop) < 0.12,
+              colorDistance(sourceBottom, normalizedBottom) < 0.12 else {
+            throw LumaError("Scene capture resizing changed or vertically flipped the rendered frame colors.")
+        }
+        _ = try await host.webView.callAsyncJavaScript("window.lumaCapture=window.__lumaOriginalCapture;delete window.__lumaOriginalCapture;delete window.__lumaPatternCapture;return true", arguments: [:], in: nil, contentWorld: .page)
         _ = try await host.webView.callAsyncJavaScript("HTMLCanvasElement.prototype.toBlob=function(callback){callback(null)}; return true", arguments: [:], in: nil, contentWorld: .page)
         let fallbackFrame = try await host.capture(time: 0.1, width: 320, height: 180)
-        guard let fallbackBitmap = NSBitmapImageRep(data: fallbackFrame), fallbackBitmap.pixelsWide == 320, fallbackBitmap.pixelsHigh == 180 else { throw LumaError("Scene capture did not fall back to a data URL when canvas.toBlob returned null.") }
+        guard let fallbackBitmap = NSBitmapImageRep(data: fallbackFrame) else { throw LumaError("Scene capture did not fall back to a decodable data URL when canvas.toBlob returned null.") }
+        guard fallbackBitmap.pixelsWide == 320, fallbackBitmap.pixelsHigh == 180 else { throw LumaError("Data URL fallback frame dimensions are wrong: got \(fallbackBitmap.pixelsWide)×\(fallbackBitmap.pixelsHigh), expected 320×180.") }
         var bright=0
         for y in stride(from:0,to:180,by:3){for x in stride(from:0,to:320,by:3){if let color=bitmap.colorAt(x:x,y:y)?.usingColorSpace(.deviceRGB),color.greenComponent>0.2 {bright += 1}}}
         guard bright>10 else {throw LumaError("The scene capture contained no rendered text")}
@@ -123,10 +164,17 @@ import AVFoundation
             try Data("{\"title\":\"Script fixture\",\"type\":\"scene\",\"file\":\"scene.pkg\"}".utf8).write(to: folder.appendingPathComponent("project.json"))
             return folder
         }
-        func run(_ name: String, code: String, enabled: Bool, staleApproval: Bool = false, rejected: Bool = false, timeoutEvent: String? = nil, helper: String? = nil, objectScript: String? = nil, extraLayer: Bool = false, extraParticle: Bool = false, expectedDiagnostic: String? = nil, check: ((SceneHost) async throws -> Void)? = nil) async throws {
+        func run(_ name: String, code: String, enabled: Bool, staleApproval: Bool = false, changedAfterReview: Bool = false, rejected: Bool = false, timeoutEvent: String? = nil, helper: String? = nil, objectScript: String? = nil, extraLayer: Bool = false, extraParticle: Bool = false, expectedDiagnostic: String? = nil, check: ((SceneHost) async throws -> Void)? = nil) async throws {
             let folder = try project(name, code: code, helper: helper, objectScript: objectScript, extraLayer: extraLayer, extraParticle: extraParticle)
+            let raceScriptURL = folder.appendingPathComponent("reviewed-helper.js")
+            if changedAfterReview { try Data("export function update(){ return 'reviewed'; }".utf8).write(to: raceScriptURL) }
             let review = try SceneScriptReview.inspect(folder: folder)
             guard review.canApprove else { throw LumaError("Script fixture did not produce a complete source review (\(review.sources.count) sources): \(review.issues.joined(separator: "; "))") }
+            if changedAfterReview { try Data("export function update(){ return 'changed after approval'; }".utf8).write(to: raceScriptURL, options: .atomic) }
+            let packageBytes = try Data(contentsOf: folder.appendingPathComponent("scene.pkg"))
+            guard let reviewedPackageDigest = review.resourceFingerprints["scene.pkg"] else { throw LumaError("The review did not fingerprint the active scene package.") }
+            let actualDigest = SHA256.hash(data: packageBytes).map { String(format: "%02x", $0) }.joined()
+            guard actualDigest == reviewedPackageDigest else { throw LumaError("The reviewed package digest does not match the exact package bytes.") }
             var wallpaper = Wallpaper(title: name, kind: .scene, folder: name, entry: "scene.pkg")
             wallpaper.trustedScripts = enabled
             wallpaper.scriptApprovalFingerprint = staleApproval ? "stale-fingerprint" : review.fingerprint
@@ -139,7 +187,10 @@ import AVFoundation
             let deadline = Date().addingTimeInterval(35)
             while !host.didBecomeReady {
                 if let failure { throw LumaError(failure) }
-                guard Date() < deadline else { throw LumaError("Script fixture did not render: \(name); \(diagnostics.joined(separator: "; "))") }
+                guard Date() < deadline else {
+                    let rendererState = try? await host.webView.callAsyncJavaScript("const canvas=document.querySelector('canvas'); const gl=canvas?.getContext('webgl2'); return {readyState:document.readyState,canvas:canvas?{width:canvas.width,height:canvas.height,clientWidth:canvas.clientWidth,clientHeight:canvas.clientHeight,contextLost:gl?.isContextLost()??null}:null,wallpaperType:typeof window.wallpaper,diagnostics:window.lumaEditorScriptIssues?.()||[]}", arguments: [:], in: nil, contentWorld: .page)
+                    throw LumaError("Script fixture did not render: \(name); pageLoaded=\(host.pageLoaded), webViewLoading=\(host.webView.isLoading), url=\(host.webView.url?.absoluteString ?? "none"), rendererError=\(failure ?? "none"), diagnostics=\(diagnostics.joined(separator: "; ")), rendererState=\(Safety.json(rendererState ?? NSNull()))")
+                }
                 try await Task.sleep(for: .milliseconds(50))
             }
             if let event = timeoutEvent {
@@ -156,7 +207,7 @@ import AVFoundation
                 try await Task.sleep(for: .milliseconds(250))
                 guard diagnostics.filter({ $0.contains("timed out") }).count == count else { throw LumaError("Timed-out scripts continued receiving events.") }
             } else {
-                let expected = enabled && !staleApproval && !rejected ? 123.0 : 960.0
+                let expected = enabled && !staleApproval && !changedAfterReview && !rejected ? 123.0 : 960.0
                 host.setPlaying(true)
                 let limit = Date().addingTimeInterval(5)
                 var properties: [String: Any]?
@@ -189,6 +240,7 @@ import AVFoundation
                   (value["now"] as? Double ?? 0) > 1_000_000_000_000
             else { throw LumaError("Worker clock/vector values were not returned after the host write: \(Safety.json(layer))") }
         }
+        try await run("review-source-changed-after-review", code: clock, enabled: true, changedAfterReview: true, expectedDiagnostic: "source changed")
         try await run("mixed-text-object-updates", code: clock, enabled: true, objectScript: "export function update(value) { return value; }")
         try await run("isolated-random", code: "export function update(value) { const first=Math.random(),second=Math.random(); thisLayer.origin=new Vec3(first>=0 && first<1 && second>=0 && second<1 && first!==second?123:456,540,0); return 'RANDOM'; }", enabled: true)
         try await run("layer-transform-matrix", code: "export function update(value) { const world=thisLayer.getTransformMatrix().transformPoint(new Vec3(0,0,0)); const good=world.subtract(thisLayer.origin).length()<0.001; thisLayer.origin=new Vec3(good?123:456,540,0); return 'TRANSFORM'; }", enabled: true)

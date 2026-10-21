@@ -2,6 +2,11 @@ import AppKit
 import Combine
 import Foundation
 
+private final class WeakSceneMediaProviderReference: @unchecked Sendable {
+    weak var value: SceneMediaProvider?
+    init(_ value: SceneMediaProvider) { self.value = value }
+}
+
 /// User-selected metadata source. Fixed host-owned AppleScript only; scene code
 /// can neither choose a target app nor supply automation commands.
 @MainActor final class SceneMediaProvider: ObservableObject {
@@ -18,6 +23,7 @@ import Foundation
     @Published private(set) var snapshot = TrackSnapshot.empty
     private var timer: Timer?
     private var reading = false
+    private var stopped = false
     private var generation = 0
     private let queue = DispatchQueue(label: "dev.patrick.Luma.track-metadata", qos: .utility)
 
@@ -37,6 +43,7 @@ import Foundation
 
     func startSavedSource() { setSource(Source(rawValue: UserDefaults.standard.string(forKey: Self.preferenceKey) ?? "") ?? .off, save: false) }
     func setSource(_ value: Source, save: Bool = true) {
+        stopped = false
         generation += 1
         timer?.invalidate(); timer = nil
         source = value; snapshot = .empty
@@ -48,34 +55,36 @@ import Foundation
         }
         status = "Waiting for \(value.title). macOS may ask you to allow Luma under Privacy & Security → Automation."
         poll()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in Task { @MainActor in self?.poll() } }
+        let weakOwner = WeakSceneMediaProviderReference(self)
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in Task { @MainActor in weakOwner.value?.poll() } }
     }
     func retry() { setSource(source, save: false) }
     func stop(clearPreference: Bool = false) {
+        stopped = true
         generation += 1
         timer?.invalidate(); timer = nil
         snapshot = .empty
         if clearPreference { source = .off; status = "Track information is off."; UserDefaults.standard.removeObject(forKey: Self.preferenceKey) }
     }
     private func poll() {
-        guard source != .off, !reading else { return }
+        guard !stopped, source != .off, !reading else { return }
         let selected = source, token = generation
         guard !NSRunningApplication.runningApplications(withBundleIdentifier: selected.bundleID).isEmpty else {
             snapshot = .empty; status = "Open \(selected.title) and play a track to share its title, artist, album, and playback position."; return
         }
         reading = true
-        queue.async { [weak self] in
+        let owner = self
+        queue.async {
             let result = Self.read(selected)
             Task { @MainActor in
-                guard let self else { return }
-                self.reading = false
-                guard self.generation == token, self.source == selected else { return }
+                owner.reading = false
+                guard owner.generation == token, owner.source == selected else { return }
                 switch result {
-                case .success(let value): self.snapshot = value; self.status = value.available ? "Receiving track metadata from \(selected.title)." : "\(selected.title) has no current track."
+                case .success(let value): owner.snapshot = value; owner.status = value.available ? "Receiving track metadata from \(selected.title)." : "\(selected.title) has no current track."
                 case .failure(let error):
-                    self.snapshot = .empty; self.status = error.localizedDescription
+                    owner.snapshot = .empty; owner.status = error.localizedDescription
                     // Do not repeatedly request denied automation or flood errors.
-                    self.timer?.invalidate(); self.timer = nil
+                    owner.timer?.invalidate(); owner.timer = nil
                 }
             }
         }
