@@ -95,7 +95,10 @@ jobs:
             core) ./Scripts/test.sh 2>&1 | tee build/Logs/test.log ;;
             editor) ./Scripts/test-editor.sh 2>&1 | tee build/Logs/test.log ;;
             instance) ./Scripts/test-instance.sh 2>&1 | tee build/Logs/test.log ;;
-            scenes) ./Scripts/test-scenes.sh 2>&1 | tee build/Logs/test.log ;;
+            scenes)
+              ./Scripts/test-scenes.sh 2>&1 | tee build/Logs/test.log
+              ./build/LumaSceneTests "$PWD/Luma/Resources" --canvas-png-unavailable 2>&1 | tee build/Logs/test-no-canvas-png.log
+              ;;
             *) exit 2 ;;
           esac
       - name: Upload test logs

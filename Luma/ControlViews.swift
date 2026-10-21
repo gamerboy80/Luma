@@ -46,30 +46,6 @@ struct WorkshopView: View {
     func sendSecret(){steam.sendSecret(secret);secret=""}
 }
 
-struct DisplaysView:View {
-    @ObservedObject var library:LibraryStore
-    @ObservedObject var desktop:DesktopEngine
-    var body:some View {
-        ScrollView {VStack(alignment:.leading,spacing:22){Text("Every screen, your way.").font(.system(size:28,weight:.semibold,design:.rounded));Text("Independent playback, framing, and sound for each connected display.").font(.subheadline).foregroundStyle(.secondary)
-            ForEach(desktop.screens,id:\.persistentID){screen in
-                VStack(alignment:.leading,spacing:16){
-                    HStack {Image(systemName:"display").font(.system(size:34,weight:.ultraLight)).foregroundStyle(tintColor);VStack(alignment:.leading,spacing:4){Text(screen.localizedName).font(.headline);Text("\(Int(screen.frame.width * screen.backingScaleFactor)) × \(Int(screen.frame.height * screen.backingScaleFactor)) · \(screen.backingScaleFactor,specifier:"%.0f")×").font(.caption).foregroundStyle(.secondary)};Spacer();Toggle("Enabled",isOn:binding(screen,\.enabled)).toggleStyle(.switch).fixedSize()}
-                    Picker("Wallpaper",selection:binding(screen,\.wallpaperID)){Text("None").tag(nil as UUID?);ForEach(library.state.wallpapers){Text($0.title).tag(Optional($0.id))}}
-                    Picker("Fit",selection:binding(screen,\.fit)){ForEach(FitMode.allCases,id:\.self){Text($0.rawValue.capitalized).tag($0)}}.pickerStyle(.segmented)
-                    slider("Zoom",value:binding(screen,\.scale),range:1...2)
-                    slider("Horizontal",value:binding(screen,\.offsetX),range:-0.5...0.5)
-                    slider("Vertical",value:binding(screen,\.offsetY),range:-0.5...0.5)
-                    slider("Volume",value:binding(screen,\.volume),range:0...1)
-                    slider("Video speed",value:binding(screen,\.speed),range:0.25...2)
-                    HStack {Toggle("Pause this display",isOn:binding(screen,\.paused));Spacer();Button("Reset Framing"){desktop.configure(screen.persistentID){$0.scale=1;$0.offsetX=0;$0.offsetY=0;$0.fit = .cover}};Button("Reload"){desktop.retry(screen.persistentID)}}.font(.caption)
-                    if let reasons=desktop.pauseReasons[screen.persistentID],!reasons.isEmpty {Label(reasons.joined(separator:" · "),systemImage:"pause.circle").font(.caption).foregroundStyle(.orange)}
-                }.padding(22).background(.white.opacity(0.035),in:RoundedRectangle(cornerRadius:14))
-            }
-        }.padding(30)}
-    }
-    func binding<T>(_ screen:NSScreen,_ path:WritableKeyPath<DisplayConfiguration,T>)->Binding<T>{Binding(get:{(library.state.displays[screen.persistentID] ?? DisplayConfiguration())[keyPath:path]},set:{value in desktop.configure(screen.persistentID){$0[keyPath:path]=value}})}
-    func slider(_ title:String,value:Binding<Double>,range:ClosedRange<Double>)->some View{HStack {Text(title).frame(width:95,alignment:.leading);Slider(value:value,in:range);Text(String(format:"%.2f",value.wrappedValue)).monospacedDigit().frame(width:40)}.font(.caption)}
-}
 struct PlaylistView:View {
     @ObservedObject var library:LibraryStore
     @ObservedObject var desktop:DesktopEngine

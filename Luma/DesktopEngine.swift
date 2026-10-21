@@ -3,6 +3,7 @@ import AVFoundation
 import Combine
 import IOKit.ps
 import QuartzCore
+import ImageIO
 
 extension NSScreen {
     var displayID: CGDirectDisplayID { (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0 }
@@ -10,6 +11,7 @@ extension NSScreen {
         if let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() { return CFUUIDCreateString(nil, uuid) as String }
         return String(displayID)
     }
+    var wallpaperPixelSize: CGSize { CGSize(width: frame.width * backingScaleFactor, height: frame.height * backingScaleFactor) }
 }
 
 @MainActor final class DesktopSurface {
@@ -21,6 +23,7 @@ extension NSScreen {
     var looper: AVPlayerLooper?
     var videoLayer: AVPlayerLayer?
     var imageLayer: CALayer?
+    var sourcePixelSize: CGSize?
     var scene: SceneHost?
     var observations: [NSKeyValueObservation] = []
     var ready = false
@@ -50,12 +53,14 @@ extension NSScreen {
         window.setFrame(screen.frame, display: true)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         let bounds = view.bounds
-        let frame = CGRect(x: bounds.midX - bounds.width * configuration.scale / 2 + bounds.width * configuration.offsetX,
-                           y: bounds.midY - bounds.height * configuration.scale / 2 + bounds.height * configuration.offsetY,
-                           width: bounds.width * configuration.scale, height: bounds.height * configuration.scale)
+        let presentation = player?.currentItem?.presentationSize ?? .zero
+        var source = sourcePixelSize
+        if WallpaperPlacement.valid(presentation) { source = presentation }
+        if source == nil, let width = wallpaper.width, let height = wallpaper.height { source = CGSize(width: width, height: height) }
+        let frame = WallpaperPlacement.frame(in: bounds, configuration: configuration, sourcePixels: wallpaper.kind == .image || wallpaper.kind == .video ? source : nil, displayPixels: screen.wallpaperPixelSize)
         videoLayer?.frame = frame
         imageLayer?.frame = frame
-        imageLayer?.contentsGravity = configuration.fit == .contain ? .resizeAspect : (configuration.fit == .stretch ? .resize : .resizeAspectFill)
+        imageLayer?.contentsGravity = configuration.fit == .contain || configuration.fit == .center ? .resizeAspect : (configuration.fit == .stretch ? .resize : .resizeAspectFill)
         videoLayer?.contentsScale = preferences.retina ? screen.backingScaleFactor : 1
         videoLayer?.videoGravity = configuration.fit == .cover ? .resizeAspectFill : (configuration.fit == .contain ? .resizeAspect : .resize)
         scene?.webView.frame = frame
@@ -182,11 +187,21 @@ enum DesktopStillOwnership {
     }
     func apply(_ wallpaper: Wallpaper, to screenID: String?) {
         let ids = screenID.map { [$0] } ?? screens.map(\.persistentID)
-        for id in ids { var config = library.state.displays[id] ?? DisplayConfiguration(); config.wallpaperID = wallpaper.id; config.enabled = true; library.state.displays[id] = config; retryCounts[id] = 0 }
+        for id in ids { var config = library.state.displays[id] ?? DisplayConfiguration(); config.wallpaperID = wallpaper.id; config.enabled = true; if config.fit == .center && (wallpaper.kind == .scene || wallpaper.kind == .web) { config.fit = .cover }; library.state.displays[id] = config; retryCounts[id] = 0 }
         lastPlaylist = Date(); library.save()
     }
     func configure(_ screenID: String, update: (inout DisplayConfiguration) -> Void) {
         var config = library.state.displays[screenID] ?? DisplayConfiguration(); update(&config); library.state.displays[screenID] = config; library.save()
+    }
+    @discardableResult func applyAdjustment(_ draft: DisplayAdjustmentDraft) throws -> DisplayConfiguration {
+        let configuration = try draft.validated(connectedIDs: Set(screens.map(\.persistentID)), saved: library.state.displays[draft.displayID] ?? DisplayConfiguration())
+        guard configuration.wallpaperID == nil || library.state.wallpapers.contains(where: { $0.id == configuration.wallpaperID }) else {
+            throw LumaError("The selected wallpaper was removed. Choose another wallpaper before applying.")
+        }
+        library.state.displays[draft.displayID] = configuration
+        guard library.save() else { throw LumaError(library.error ?? "The display adjustments could not be saved.") }
+        if configuration.wallpaperID != draft.baseline.wallpaperID { lastPlaylist = Date(); retryCounts[draft.displayID] = 0 }
+        return configuration
     }
     func stopAll() {
         for id in Array(library.state.displays.keys) { library.state.displays[id]?.wallpaperID = nil }
@@ -244,6 +259,10 @@ enum DesktopStillOwnership {
                 player.play()
             case .image:
                 guard let image = NSImage(contentsOf: media) else { throw LumaError("The image could not be decoded.") }
+                if let source = CGImageSourceCreateWithURL(media as CFURL, nil), let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                   let width = properties[kCGImagePropertyPixelWidth] as? NSNumber, let height = properties[kCGImagePropertyPixelHeight] as? NSNumber {
+                    surface.sourcePixelSize = WallpaperPlacement.orientedPixels(CGSize(width: width.doubleValue, height: height.doubleValue), orientation: (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1)
+                }
                 let layer = CALayer(); layer.frame = surface.view.bounds; layer.contents = image; layer.contentsGravity = configuration.fit == .contain ? .resizeAspect : (configuration.fit == .stretch ? .resize : .resizeAspectFill); surface.view.layer?.addSublayer(layer); surface.imageLayer = layer
                 Task { @MainActor in ready() }
             case .scene, .web:
@@ -261,6 +280,7 @@ enum DesktopStillOwnership {
         let id = surface.screenID
         guard pending[id] === surface, !surface.ready else { return }
         surface.ready = true
+        if let screen = screens.first(where: { $0.persistentID == id }) { surface.updateGeometry(screen: screen, preferences: library.state.preferences) }
         let old = surfaces[id]; pending.removeValue(forKey: id); surfaces[id] = surface
         updatePolicy()
         NSAnimationContext.runAnimationGroup { context in context.duration = 0.5; surface.window.animator().alphaValue = 1 } completionHandler: { Task { @MainActor in old?.stop() } }

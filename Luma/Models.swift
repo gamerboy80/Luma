@@ -1,8 +1,13 @@
 import Foundation
 import Darwin
+import CoreGraphics
 
 enum WallpaperKind: String, Codable, CaseIterable, Sendable { case video, scene, web, image }
-enum FitMode: String, Codable, CaseIterable { case cover, contain, stretch }
+enum FitMode: String, Codable, CaseIterable {
+    case cover, contain, stretch, center
+    var title: String { switch self { case .cover: "Fill"; case .contain: "Fit"; case .stretch: "Stretch"; case .center: "Center" } }
+    var rendererValue: String { self == .center ? "contain" : rawValue }
+}
 struct Wallpaper: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var title: String
@@ -45,6 +50,60 @@ struct DisplayConfiguration: Codable, Equatable {
         offsetY = offsetY.isFinite ? min(100_000, max(-100_000, offsetY)) : 0
     }
 }
+enum WallpaperPlacement {
+    static func orientedPixels(_ size: CGSize, orientation: Int) -> CGSize {
+        (5...8).contains(orientation) ? CGSize(width: size.height, height: size.width) : size
+    }
+    static func previewSize(display: CGSize, available: CGSize) -> CGSize {
+        guard valid(display), valid(available) else { return .zero }
+        let scale = min(available.width / display.width, available.height / display.height)
+        return CGSize(width: display.width * scale, height: display.height * scale)
+    }
+    static func frame(in bounds: CGRect, configuration: DisplayConfiguration, sourcePixels: CGSize? = nil, displayPixels: CGSize? = nil) -> CGRect {
+        guard valid(bounds.size) else { return .zero }
+        var config = configuration; config.normalizeForRuntime()
+        var size = CGSize(width: bounds.width * config.scale, height: bounds.height * config.scale)
+        if config.fit == .center, let sourcePixels, let displayPixels, valid(sourcePixels), valid(displayPixels) {
+            size = CGSize(width: bounds.width * sourcePixels.width / displayPixels.width * config.scale,
+                          height: bounds.height * sourcePixels.height / displayPixels.height * config.scale)
+        }
+        return CGRect(x: bounds.midX - size.width / 2 + bounds.width * config.offsetX,
+                      y: bounds.midY - size.height / 2 + bounds.height * config.offsetY,
+                      width: size.width, height: size.height)
+    }
+    static func contentRect(in bounds: CGRect, sourcePixels: CGSize, displayPixels: CGSize, configuration: DisplayConfiguration) -> CGRect {
+        let viewport = frame(in: bounds, configuration: configuration, sourcePixels: sourcePixels, displayPixels: displayPixels)
+        guard valid(sourcePixels), valid(viewport.size) else { return .zero }
+        if configuration.fit == .stretch || configuration.fit == .center { return viewport }
+        let ratios = CGSize(width: viewport.width / sourcePixels.width, height: viewport.height / sourcePixels.height)
+        let scale = configuration.fit == .cover ? max(ratios.width, ratios.height) : min(ratios.width, ratios.height)
+        let size = CGSize(width: sourcePixels.width * scale, height: sourcePixels.height * scale)
+        return CGRect(x: viewport.midX - size.width / 2, y: viewport.midY - size.height / 2, width: size.width, height: size.height)
+    }
+    static func draggedOffsets(start: CGSize, translation: CGSize, previewSize: CGSize) -> CGSize {
+        guard valid(previewSize), translation.width.isFinite, translation.height.isFinite else { return start }
+        return CGSize(width: min(1, max(-1, start.width + translation.width / previewSize.width)),
+                      height: min(1, max(-1, start.height - translation.height / previewSize.height)))
+    }
+    static func valid(_ size: CGSize) -> Bool { size.width.isFinite && size.height.isFinite && size.width > 0 && size.height > 0 }
+}
+
+struct DisplayAdjustmentDraft {
+    let displayID: String
+    private(set) var baseline: DisplayConfiguration
+    var configuration: DisplayConfiguration
+    init(displayID: String, configuration: DisplayConfiguration) {
+        self.displayID = displayID; baseline = configuration; self.configuration = configuration
+    }
+    var hasChanges: Bool { configuration != baseline }
+    mutating func resetPlacement() { configuration.fit = .cover; configuration.scale = 1; configuration.offsetX = 0; configuration.offsetY = 0 }
+    func validated(connectedIDs: Set<String>, saved: DisplayConfiguration) throws -> DisplayConfiguration {
+        guard connectedIDs.contains(displayID) else { throw LumaError("This display was disconnected. Reconnect it before applying these adjustments.") }
+        guard saved == baseline else { throw LumaError("This display's saved settings changed while you were adjusting it. Discard the draft to load the latest settings.") }
+        var result = configuration; result.normalizeForRuntime(); return result
+    }
+}
+
 struct AppPreferences: Codable {
     var pauseOnBattery = false
     var pauseOnLowPower = true

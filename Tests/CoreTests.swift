@@ -22,6 +22,41 @@ import AVFoundation
         func rejects(_ body: () throws -> Void) throws {
             do { try body() } catch { assertions += 1; return }; throw LumaError("FAILED: unsafe input was accepted")
         }
+        currentPhase = "display adjustment geometry and draft ownership"
+        let landscape = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let square = CGSize(width: 1000, height: 1000)
+        try check(WallpaperPlacement.orientedPixels(CGSize(width: 1920, height: 1080), orientation: 6) == CGSize(width: 1080, height: 1920), "rotated image metadata uses the oriented pixel dimensions")
+        var placement = DisplayConfiguration()
+        try check(WallpaperPlacement.contentRect(in: landscape, sourcePixels: square, displayPixels: landscape.size, configuration: placement) == CGRect(x: 0, y: -420, width: 1920, height: 1920), "Fill crops square media to a landscape display")
+        placement.fit = .contain
+        try check(WallpaperPlacement.contentRect(in: landscape, sourcePixels: square, displayPixels: landscape.size, configuration: placement) == CGRect(x: 420, y: 0, width: 1080, height: 1080), "Fit preserves aspect ratio and centers letterboxing")
+        placement.fit = .stretch
+        try check(WallpaperPlacement.contentRect(in: landscape, sourcePixels: square, displayPixels: landscape.size, configuration: placement) == landscape, "Stretch fills the entire display")
+        placement.fit = .center
+        let hd = CGSize(width: 960, height: 540)
+        try check(WallpaperPlacement.frame(in: landscape, configuration: placement, sourcePixels: hd, displayPixels: landscape.size) == CGRect(x: 480, y: 270, width: 960, height: 540), "Center retains one source pixel per display backing pixel")
+        try check(WallpaperPlacement.frame(in: CGRect(x: 0, y: 0, width: 960, height: 540), configuration: placement, sourcePixels: hd, displayPixels: landscape.size) == CGRect(x: 240, y: 135, width: 480, height: 270), "Center respects HiDPI logical-to-backing scale")
+        placement.fit = .cover; placement.scale = 2; placement.offsetX = 0.1; placement.offsetY = -0.2
+        try check(WallpaperPlacement.frame(in: landscape, configuration: placement) == CGRect(x: -768, y: -756, width: 3840, height: 2160), "zoom and positioning preserve existing native placement semantics")
+        try check(WallpaperPlacement.frame(in: CGRect(x: 0, y: 0, width: 480, height: 270), configuration: placement) == CGRect(x: -192, y: -189, width: 960, height: 540), "the preview and desktop use proportionally identical placement")
+        try check(WallpaperPlacement.previewSize(display: CGSize(width: 1080, height: 1920), available: CGSize(width: 600, height: 400)) == CGSize(width: 225, height: 400), "rotated display previews retain portrait shape")
+        try check(WallpaperPlacement.previewSize(display: landscape.size, available: CGSize(width: 600, height: 400)) == CGSize(width: 600, height: 337.5), "landscape previews fit available space without distortion")
+        try check(WallpaperPlacement.previewSize(display: .zero, available: landscape.size) == .zero, "a disconnected or zero-size display does not produce invalid geometry")
+        let dragged = WallpaperPlacement.draggedOffsets(start: .zero, translation: CGSize(width: 48, height: 27), previewSize: CGSize(width: 480, height: 270))
+        try check(abs(dragged.width - 0.1) < 0.0001 && abs(dragged.height + 0.1) < 0.0001, "dragging converts SwiftUI's downward y axis into desktop offsets")
+        try check(WallpaperPlacement.draggedOffsets(start: dragged, translation: .zero, previewSize: .zero) == dragged, "display disappearance during dragging preserves the last valid position")
+        var draft = DisplayAdjustmentDraft(displayID: "screen-A", configuration: DisplayConfiguration())
+        draft.configuration = placement
+        try check(draft.hasChanges, "adjustments remain an unsaved draft")
+        let otherSettings = DisplayConfiguration(wallpaperID: UUID(), paused: true, enabled: false, fit: .center, scale: 2, offsetX: 0.2, offsetY: -0.1, volume: 0.4, speed: 1.5)
+        var reset = DisplayAdjustmentDraft(displayID: "screen-A", configuration: otherSettings); reset.resetPlacement()
+        try check(reset.configuration.fit == .cover && reset.configuration.scale == 1 && reset.configuration.offsetX == 0 && reset.configuration.offsetY == 0 && reset.configuration.wallpaperID == otherSettings.wallpaperID && reset.configuration.volume == 0.4 && reset.configuration.speed == 1.5 && !reset.configuration.enabled, "reset only changes placement, preserving assignment and playback settings")
+        let accepted = try draft.validated(connectedIDs: ["screen-A", "screen-B"], saved: DisplayConfiguration())
+        try check(accepted == placement && draft.displayID == "screen-A", "a draft is bound to its intended persistent display ID")
+        try rejects { _ = try draft.validated(connectedIDs: ["screen-B"], saved: DisplayConfiguration()) }
+        try rejects { _ = try draft.validated(connectedIDs: ["screen-A"], saved: otherSettings) }
+        let centerRoundTrip = try JSONDecoder().decode(DisplayConfiguration.self, from: JSONEncoder().encode(otherSettings))
+        try check(centerRoundTrip == otherSettings, "Center placement persists with display-specific settings")
         currentPhase = "scene media metadata and fixed query checks"
         let track = SceneMediaProvider.decode(["playing", "A \"title\"\nwith text", "Artist", "Album", "Album Artist", "12.5", "180", "3"])
         try check(track.available && track.title == "A \"title\"\nwith text" && track.position == 12.5 && track.duration == 180, "track metadata preserves text and timeline")
@@ -187,6 +222,27 @@ import AVFoundation
         let fixture = root.appendingPathComponent("fixture.mov")
         currentPhase = "AVFoundation H.264 fixture encode (128×72, 60 frames)"
         try await makeVideo(fixture)
+        currentPhase = "native display adjustment preview"
+        _ = NSApplication.shared
+        let previewImageURL = root.appendingPathComponent("display-preview.png")
+        let previewGenerator = AVAssetImageGenerator(asset: AVURLAsset(url: fixture))
+        let previewFrame = try await previewGenerator.image(at: .zero).image
+        guard let previewPNG = NSBitmapImageRep(cgImage: previewFrame).representation(using: .png, properties: [:]) else { throw LumaError("Could not encode the adjustment preview fixture.") }
+        try previewPNG.write(to: previewImageURL)
+        let preview = DisplayWallpaperPreviewView(frame: CGRect(x: 0, y: 0, width: 480, height: 270))
+        var previewStatus = ""
+        preview.displayPixels = landscape.size
+        preview.load(folder: root, media: previewImageURL, assets: nil, wallpaper: Wallpaper(title: "Preview", kind: .image, folder: "", entry: "display-preview.png"), configuration: DisplayConfiguration(), preferences: AppPreferences()) { previewStatus = $0 }
+        defer { preview.stop() }
+        let previewDeadline = Date().addingTimeInterval(10)
+        while previewStatus != "Image preview" { guard Date() < previewDeadline else { throw LumaError("The native adjustment preview did not load: \(previewStatus)") }; try await Task.sleep(for: .milliseconds(25)) }
+        for mode in FitMode.allCases {
+            preview.configuration.fit = mode; preview.configuration.offsetX = 0.1; preview.configuration.offsetY = -0.1
+            preview.layout()
+            let expected = WallpaperPlacement.frame(in: preview.bounds, configuration: preview.configuration, sourcePixels: CGSize(width: previewFrame.width, height: previewFrame.height), displayPixels: landscape.size)
+            try check(preview.layer?.sublayers?.first?.frame == expected && preview.layer?.masksToBounds == true, "native adjustment preview applies shared \(mode.title) geometry and clips to the display frame")
+        }
+        preview.stop()
         currentPhase = "video library import, persistence, and ownership rollback checks"
         let library = LibraryStore(root:root.appendingPathComponent("library"))
         try await library.importURL(fixture)
@@ -242,6 +298,25 @@ import AVFoundation
             pendingLibrary.state.preferences.paused = false; pendingEngine.updatePolicy()
             try check(!pendingEngine.isTrackingPointer && waitingPlayer.rate > 0, "running native video playback does not start a scene cursor timer")
             pendingLibrary.state.preferences.paused = true; pendingEngine.updatePolicy()
+            pendingLibrary.state.displays["offline-display-fixture"] = otherSettings
+            try check(pendingLibrary.save(), "persist independent display configurations before adjustment")
+            var adjustment = DisplayAdjustmentDraft(displayID: screen.persistentID, configuration: pendingLibrary.state.displays[screen.persistentID] ?? DisplayConfiguration())
+            adjustment.configuration.fit = .center; adjustment.configuration.scale = 1; adjustment.configuration.offsetX = 0; adjustment.configuration.offsetY = 0
+            let applied = try pendingEngine.applyAdjustment(adjustment)
+            try check(pendingLibrary.state.displays["offline-display-fixture"] == otherSettings && pendingLibrary.state.displays[screen.persistentID] == applied, "applying adjustments changes only the selected display")
+            let restoredDisplays = try JSONDecoder().decode(SavedLibrary.self, from: Data(contentsOf: pendingLibrary.root.appendingPathComponent("library.json")))
+            try check(restoredDisplays.displays[screen.persistentID] == applied && restoredDisplays.displays["offline-display-fixture"] == otherSettings, "display placement and unrelated display settings survive persistence")
+            let actualSource = waitingPlayer.currentItem?.presentationSize ?? .zero
+            let expectedCenter = WallpaperPlacement.frame(in: waiting.view.bounds, configuration: applied, sourcePixels: actualSource, displayPixels: screen.wallpaperPixelSize)
+            try check(waiting.videoLayer?.frame == expectedCenter, "native video Center placement uses the same geometry as its preview")
+            let reconnectDraft = DisplayAdjustmentDraft(displayID: screen.persistentID, configuration: applied)
+            let connectedScreens = pendingEngine.screens
+            pendingEngine.screens = []
+            try rejects { _ = try pendingEngine.applyAdjustment(reconnectDraft) }
+            try check(pendingLibrary.state.displays[screen.persistentID] == applied, "disconnecting a display cannot redirect or apply its draft")
+            pendingEngine.screens = connectedScreens
+            pendingEngine.configure(screen.persistentID) { $0.offsetX = 0.1 }
+            try rejects { _ = try pendingEngine.applyAdjustment(reconnectDraft) }
             let videoID = pendingLibrary.state.wallpapers[0].id
             pendingLibrary.edit(videoID) { $0.propertiesJSON = "{\"temporary\":true}" }
             guard let obsolete = pendingEngine.pending[screen.persistentID] else { throw LumaError("FAILED: content edit did not stage a replacement video") }
@@ -249,6 +324,8 @@ import AVFoundation
             pendingLibrary.edit(videoID) { $0.propertiesJSON = "{}" }
             try check(pendingEngine.pending[screen.persistentID] == nil && pendingEngine.surfaces[screen.persistentID] === waiting,
                       "reverting to the active wallpaper cancels an obsolete pending replacement for the same wallpaper ID")
+            let reopenedDisplayLibrary = LibraryStore(root: pendingLibrary.root)
+            try check(reopenedDisplayLibrary.state.displays == pendingLibrary.state.displays, "reopening the library restores all display adjustments")
         } else {
             print("SKIP: pending desktop playback checks require an available macOS display")
         }

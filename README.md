@@ -29,6 +29,14 @@ open build/Build/Products/Release/Luma.app
 - Experimental macOS 26+ native lock screen/screen saver installation for videos and rendered scene loops, including HEVC Main10 conversion, temporal-layer metadata checks, fresh IDs, catalog backups, schema checks, stale-write protection, and ownership-aware removal.
 - Three procedural Luma Original web wallpapers. No third-party wallpaper assets are included.
 
+## Display adjustments
+
+Choose a display on **Displays** to adjust its wallpaper in a frame matching that screen's current aspect ratio. The name, backing-pixel resolution, and persistent display identifier identify the target. Fill, Fit, Stretch, zoom, and horizontal/vertical positioning share the desktop placement geometry; dragging updates the same offsets. Center is available for images and videos and uses one source pixel per display backing pixel. Reset Placement previews the default Fill framing without changing the assignment, sound, or playback settings.
+
+Changes remain a draft until **Apply** saves that display's existing library settings. **Discard Changes** reloads its saved configuration. Switching displays warns about a dirty draft; disconnection preserves the target identity and blocks Apply, and edits made elsewhere require reloading the saved settings. Display rotation and resolution changes resize the preview without redirecting the draft to another display.
+
+Image previews use a bounded thumbnail; video and scene previews play independently and are muted. Scene previews run at 24 fps with the existing script review, approval fingerprint, execution toggle, and worker safeguards. Their smaller viewport can change screen-size-dependent script behavior, cursor parallax, and pixel-sized effects. Web projects retain their own responsive layout. Center is unavailable for scenes/web projects. Uncovered preview areas are black; macOS's underlying desktop may show through on screen. Preview playback pauses while its window is hidden or closed.
+
 ## Steam Workshop setup
 
 1. Install Valve's SteamCMD for macOS. If its Intel executable requires Rosetta, install Rosetta using Apple's normal workflow. SteamCMD is not bundled or installed automatically.

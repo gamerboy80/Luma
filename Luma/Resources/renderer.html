@@ -29,6 +29,7 @@ window.lumaCaptureBridge=async(time,width,height)=>{
  try{
   const data=await window.lumaCapture(time,width,height);
   if(typeof data!=='string')return JSON.stringify({ok:false,error:`Capture returned ${data===null?'null':typeof data}, expected a PNG data URL.`});
+  if(!data.startsWith('data:image/png;base64,')||data.length<=22)return JSON.stringify({ok:false,error:`Capture returned an invalid PNG data URL (${data.slice(0,80)}).`});
   return JSON.stringify({ok:true,data});
  }catch(error){
   const canvas=error?.lumaCaptureCanvas;
@@ -66,12 +67,14 @@ window.lumaDecodeTexture=async base64=>{
  if(!(parsed.width>0&&parsed.height>0)||parsed.width*parsed.height>33554432)throw Error('Texture dimensions exceed the fallback image limit');
  const mip=parsed.isVideo ? {video:parsed.images[0][0].data} : WebWallGL.decodeMips(parsed)[0];
  if(!mip)throw Error('This texture has no decodable image');
- if(mip.video)return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(new Blob([mip.video],{type:'video/mp4'}))});
- const canvas=document.createElement('canvas');canvas.width=mip.width;canvas.height=mip.height;
- const ctx=canvas.getContext('2d');
- if(mip.rgba){ctx.putImageData(new ImageData(new Uint8ClampedArray(mip.rgba),mip.width,mip.height),0,0)}
- else {const bytes=mip.png||mip.image;if(!bytes)throw Error('Unsupported texture encoding');const image=await createImageBitmap(new Blob([bytes]));ctx.drawImage(image,0,0);image.close?.()}
- return canvas.toDataURL('image/png');
+ const kind=mip.video?'video':mip.rgba?'rgba':'image';
+ const payload=mip.video||mip.rgba||mip.png||mip.image;
+ if(!payload)throw Error('Unsupported texture encoding');
+ if(kind==='rgba'&&(!(mip.width>0&&mip.height>0)||mip.width*mip.height>33554432||payload.byteLength!==mip.width*mip.height*4))throw Error('Invalid decoded texture dimensions');
+ const blob=new Blob([payload]);
+ if(blob.size>(kind==='rgba'?134217728:67108864))throw Error('Decoded texture payload exceeds the fallback limit');
+ const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=reject;reader.readAsDataURL(blob)});
+ return {kind,width:mip.width||0,height:mip.height||0,data};
 };
 window.addEventListener('unhandledrejection' ,e=>send('error',e.reason?.message||e.reason));
 </script></body></html>

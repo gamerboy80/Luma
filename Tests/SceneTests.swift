@@ -63,6 +63,9 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
         host.failed={error=$0};host.diagnostic={print("Scene diagnostic:",$0)}
         let deadline=Date().addingTimeInterval(40)
         while !host.didBecomeReady {if let error{throw LumaError(error)};guard Date()<deadline else {throw LumaError("No scene frame arrived (pageLoaded=\(host.pageLoaded), webViewLoading=\(host.webView.isLoading), url=\(host.webView.url?.absoluteString ?? "none"), rendererError=\(error ?? "none")).")};try await Task.sleep(for:.milliseconds(100))}
+        if CommandLine.arguments.contains("--canvas-png-unavailable") {
+            _ = try await host.webView.callAsyncJavaScript("HTMLCanvasElement.prototype.toBlob=function(callback){callback(null)};HTMLCanvasElement.prototype.toDataURL=function(){return 'data:,'};return true", arguments: [:], in: nil, contentWorld: .page)
+        }
         guard await host.editorAvailable() else { throw LumaError("The bundled WebWallGL editor API did not attach to a scene preview.") }
         let editorLayers = try await host.editorLayers()
         guard editorLayers.count == 1 else { throw LumaError("The editor API did not return the fixture layer.") }
@@ -130,18 +133,22 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
         } catch let error as LumaError {
             guard error.message.contains("capture time") else { throw error }
         }
-        _ = try await host.webView.callAsyncJavaScript("window.__lumaOriginalCapture=window.lumaCapture;const c=document.createElement('canvas');c.width=64;c.height=36;const ctx=c.getContext('2d');ctx.fillStyle='#e02020';ctx.fillRect(0,0,64,18);ctx.fillStyle='#2040e0';ctx.fillRect(0,18,64,18);window.__lumaPatternCapture=c.toDataURL('image/png');window.lumaCapture=async()=>window.__lumaPatternCapture;return true", arguments: [:], in: nil, contentWorld: .page)
+        guard let patternContext = CGContext(data: nil, width: 64, height: 36, bitsPerComponent: 8, bytesPerRow: 64 * 4,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            throw LumaError("Could not allocate the native capture fixture.")
+        }
+        patternContext.setFillColor(red: 0.88, green: 0.13, blue: 0.13, alpha: 1); patternContext.fill(CGRect(x: 0, y: 0, width: 64, height: 18))
+        patternContext.setFillColor(red: 0.13, green: 0.25, blue: 0.88, alpha: 1); patternContext.fill(CGRect(x: 0, y: 18, width: 64, height: 18))
+        guard let patternImage = patternContext.makeImage(),
+              let patternPNG = NSBitmapImageRep(cgImage: patternImage).representation(using: .png, properties: [:]),
+              let sourcePattern = NSBitmapImageRep(data: patternPNG) else { throw LumaError("Could not encode the native capture fixture.") }
+        _ = try await host.webView.callAsyncJavaScript("window.__lumaOriginalCapture=window.lumaCapture;window.lumaCapture=async()=>pattern;return true", arguments: ["pattern": "data:image/png;base64," + patternPNG.base64EncodedString()], in: nil, contentWorld: .page)
         let normalizedFrame = try await host.capture(time: 0, width: 320, height: 180)
         guard let normalizedBitmap = NSBitmapImageRep(data: normalizedFrame), normalizedBitmap.pixelsWide == 320, normalizedBitmap.pixelsHigh == 180 else {
             let actual = NSBitmapImageRep(data: normalizedFrame).map { "\($0.pixelsWide)×\($0.pixelsHigh)" } ?? "unreadable"
             throw LumaError("Host capture normalization returned \(actual), expected 320×180.")
         }
-        let sourcePatternValue = try await host.webView.callAsyncJavaScript("return window.__lumaPatternCapture", arguments: [:], in: nil, contentWorld: .page)
-        guard let sourcePatternURL = sourcePatternValue as? String,
-              let patternComma = sourcePatternURL.firstIndex(of: ","),
-              let sourcePatternData = Data(base64Encoded: String(sourcePatternURL[sourcePatternURL.index(after: patternComma)...])),
-              let sourcePattern = NSBitmapImageRep(data: sourcePatternData),
-              let sourceTop = sourcePattern.colorAt(x: 32, y: 9)?.usingColorSpace(.deviceRGB),
+        guard let sourceTop = sourcePattern.colorAt(x: 32, y: 9)?.usingColorSpace(.deviceRGB),
               let sourceBottom = sourcePattern.colorAt(x: 32, y: 27)?.usingColorSpace(.deviceRGB),
               let normalizedTop = normalizedBitmap.colorAt(x: 160, y: 45)?.usingColorSpace(.deviceRGB),
               let normalizedBottom = normalizedBitmap.colorAt(x: 160, y: 135)?.usingColorSpace(.deviceRGB) else {
@@ -155,9 +162,8 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
               colorDistance(sourceBottom, normalizedBottom) < 0.12 else {
             throw LumaError("Scene capture resizing changed or vertically flipped the rendered frame colors.")
         }
-        _ = try await host.webView.callAsyncJavaScript("window.lumaCapture=window.__lumaOriginalCapture;delete window.__lumaOriginalCapture;delete window.__lumaPatternCapture;return true", arguments: [:], in: nil, contentWorld: .page)
-        _ = try await host.webView.callAsyncJavaScript("HTMLCanvasElement.prototype.toBlob=function(callback){callback(null)}; return true", arguments: [:], in: nil, contentWorld: .page)
-        let fallbackFrame = try await host.capture(time: 0.1, width: 320, height: 180)
+        _ = try await host.webView.callAsyncJavaScript("window.lumaCapture=window.__lumaOriginalCapture;delete window.__lumaOriginalCapture;return true", arguments: [:], in: nil, contentWorld: .page)
+        let fallbackFrame = try await captureWithoutCanvasPNG(host, disableDataURL: false)
         guard let fallbackBitmap = NSBitmapImageRep(data: fallbackFrame) else { throw LumaError("Scene capture did not fall back to a decodable data URL when canvas.toBlob returned null.") }
         guard fallbackBitmap.pixelsWide == 320, fallbackBitmap.pixelsHigh == 180 else { throw LumaError("Data URL fallback frame dimensions are wrong: got \(fallbackBitmap.pixelsWide)×\(fallbackBitmap.pixelsHigh), expected 320×180.") }
         _ = try await host.webView.callAsyncJavaScript("window.__lumaCaptureForBridgeTest=window.lumaCapture;window.lumaCapture=async()=>null;return true", arguments: [:], in: nil, contentWorld: .page)
@@ -171,9 +177,11 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
         guard captureDiagnostic.contains("Capture returned null") else {
             throw LumaError("Scene capture bridge did not preserve its renderer error details: \(captureDiagnostic.isEmpty ? "capture unexpectedly succeeded" : captureDiagnostic).")
         }
-        _ = try await host.webView.callAsyncJavaScript("window.__lumaDataURL=HTMLCanvasElement.prototype.toDataURL;HTMLCanvasElement.prototype.toDataURL=function(){return 'data:,'};return true", arguments: [:], in: nil, contentWorld: .page)
-        let nativeFrame = try await host.capture(time: 0.1, width: 320, height: 180)
-        _ = try await host.webView.callAsyncJavaScript("HTMLCanvasElement.prototype.toDataURL=window.__lumaDataURL;delete window.__lumaDataURL;return true", arguments: [:], in: nil, contentWorld: .page)
+        _ = try await host.webView.callAsyncJavaScript("window.__lumaCaptureForBridgeTest=window.lumaCapture;window.lumaCapture=async()=> 'data:,';return true", arguments: [:], in: nil, contentWorld: .page)
+        do { _ = try await host.capture(time: 0.1, width: 320, height: 180); throw LumaError("The capture bridge accepted an empty data URL.") }
+        catch let error as LumaError { guard error.message.contains("invalid PNG data URL") else { throw error } }
+        _ = try await host.webView.callAsyncJavaScript("window.lumaCapture=window.__lumaCaptureForBridgeTest;delete window.__lumaCaptureForBridgeTest;return true", arguments: [:], in: nil, contentWorld: .page)
+        let nativeFrame = try await captureWithoutCanvasPNG(host, disableDataURL: true)
         guard let nativeBitmap = NSBitmapImageRep(data: nativeFrame), nativeBitmap.pixelsWide == 320, nativeBitmap.pixelsHigh == 180 else {
             throw LumaError("The native snapshot fallback did not preserve the requested frame dimensions.")
         }
@@ -195,6 +203,28 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
         let videoTexture = try Data(contentsOf: fixtures.appendingPathComponent("video-texture.tex"))
         let extractedVideo = try await host.decodeTextureMedia(videoTexture)
         guard extractedVideo.isVideo, extractedVideo.data.count == 20, String(decoding: extractedVideo.data[4..<8], as: UTF8.self) == "ftyp" else { throw LumaError("Video texture payload was not extracted") }
+        let rgba = Data([255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 255, 255])
+        _ = try await host.webView.callAsyncJavaScript("window.__lumaTextureOriginal=window.lumaDecodeTexture;window.lumaDecodeTexture=async()=>({kind:'rgba',width:2,height:2,data:rgba});return true", arguments: ["rgba": rgba.base64EncodedString()], in: nil, contentWorld: .page)
+        let rgbaPNG = try await host.decodeTexture(Data())
+        guard let pixels = NSBitmapImageRep(data: rgbaPNG), pixels.pixelsWide == 2, pixels.pixelsHigh == 2,
+              let top = pixels.colorAt(x: 0, y: 0)?.usingColorSpace(.deviceRGB), top.redComponent > 0.95, top.blueComponent < 0.05,
+              let bottom = pixels.colorAt(x: 0, y: 1)?.usingColorSpace(.deviceRGB), bottom.blueComponent > 0.95, bottom.redComponent < 0.05,
+              let translucent = pixels.colorAt(x: 1, y: 0)?.usingColorSpace(.deviceRGB), abs(translucent.alphaComponent - 128.0 / 255) < 0.02 else {
+            throw LumaError("Native texture PNG encoding changed RGBA colors, orientation, or alpha.")
+        }
+        _ = try await host.webView.callAsyncJavaScript("window.lumaDecodeTexture=async()=>({kind:'image',data:png});return true", arguments: ["png": patternPNG.base64EncodedString()], in: nil, contentWorld: .page)
+        let encodedTexturePNG = try await host.decodeTexture(Data())
+        guard let encodedTexture = NSBitmapImageRep(data: encodedTexturePNG), encodedTexture.pixelsWide == 64, encodedTexture.pixelsHigh == 36 else {
+            throw LumaError("The encoded texture image path lost its source dimensions.")
+        }
+        _ = try await host.webView.callAsyncJavaScript("window.lumaDecodeTexture=async()=>({kind:'rgba',width:2,height:2,data:'AAAAAA=='});return true", arguments: [:], in: nil, contentWorld: .page)
+        do { _ = try await host.decodeTexture(Data()); throw LumaError("The texture bridge accepted inconsistent RGBA pixels.") }
+        catch let error as LumaError { guard error.message.contains("inconsistent RGBA") else { throw error } }
+        _ = try await host.webView.callAsyncJavaScript("window.lumaDecodeTexture=async()=>({kind:'rgba',width:33554433,height:1,data:'AAAAAA=='});return true", arguments: [:], in: nil, contentWorld: .page)
+        do { _ = try await host.decodeTexture(Data()); throw LumaError("The texture bridge accepted oversized dimensions.") }
+        catch let error as LumaError { guard error.message.contains("invalid RGBA dimensions") else { throw error } }
+        _ = try await host.webView.callAsyncJavaScript("window.lumaDecodeTexture=window.__lumaTextureOriginal;delete window.__lumaTextureOriginal;return true", arguments: [:], in: nil, contentWorld: .page)
+        print("PASS: native texture PNG encoding preserves dimensions, colors, alpha, and orientation, and rejects invalid payloads")
         let still = root.appendingPathComponent("snapshot.mov")
         try await StillMovieExporter.export(imageData: frame, output: still)
         let stillAsset = AVURLAsset(url: still)
@@ -218,6 +248,22 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
         try await verifyScripts(root: root, resources: resources, template: object)
     }
 
+    @MainActor static func captureWithoutCanvasPNG(_ host: SceneHost, disableDataURL: Bool) async throws -> Data {
+        _ = try await host.webView.callAsyncJavaScript("""
+        window.__lumaPNGOriginals={toBlob:HTMLCanvasElement.prototype.toBlob,toDataURL:HTMLCanvasElement.prototype.toDataURL};
+        HTMLCanvasElement.prototype.toBlob=function(callback){callback(null)};
+        if(disableDataURL)HTMLCanvasElement.prototype.toDataURL=function(){return 'data:,'};return true
+        """, arguments: ["disableDataURL": disableDataURL], in: nil, contentWorld: .page)
+        let restore = "Object.assign(HTMLCanvasElement.prototype,window.__lumaPNGOriginals);delete window.__lumaPNGOriginals;return true"
+        do {
+            let frame = try await host.capture(time: 0.1, width: 320, height: 180)
+            _ = try await host.webView.callAsyncJavaScript(restore, arguments: [:], in: nil, contentWorld: .page)
+            return frame
+        } catch {
+            _ = try? await host.webView.callAsyncJavaScript(restore, arguments: [:], in: nil, contentWorld: .page)
+            throw error
+        }
+    }
     @MainActor static func verifyControlBridge(_ host: SceneHost) async throws {
         let snapshot = try await host.editorSnapshot(includeLayers: true, includeDiagnostics: true)
         let lightweight = try await host.editorSnapshot()

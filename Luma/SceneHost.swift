@@ -382,11 +382,11 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
     private var pointerEvaluationInFlight = false
     init(folder: URL, assets: URL?, wallpaper: Wallpaper, configuration: DisplayConfiguration, preferences: AppPreferences, resources: URL? = nil) {
         projectFolder = folder
-        rendererSettings = RendererSettings(fps: preferences.sceneFPS, volume: configuration.volume, fit: configuration.fit.rawValue)
+        rendererSettings = RendererSettings(fps: preferences.sceneFPS, volume: configuration.volume, fit: configuration.fit.rendererValue)
         scriptApproval = wallpaper.kind == .scene && wallpaper.runsSceneScript ? wallpaper.scriptApprovalFingerprint : nil
         scheme = WallpaperScheme(project: folder, assets: assets, resources: resources)
         options = ["fps": preferences.sceneFPS, "renderDpr": preferences.retina ? 0 : 1, "volume": configuration.volume,
-                   "fit": configuration.fit.rawValue, "scripts": wallpaper.kind == .scene ? false : wallpaper.runsSceneScript,
+                   "fit": configuration.fit.rendererValue, "scripts": wallpaper.kind == .scene ? false : wallpaper.runsSceneScript,
                    "properties": (try? JSONSerialization.jsonObject(with: Data(wallpaper.propertiesJSON.utf8))) as? [String: Any] ?? [:],
                    "mountTimeoutMs": 45000, "audio": NSNull(), "media": NSNull()]
         let config = WKWebViewConfiguration(); config.setURLSchemeHandler(scheme, forURLScheme: "luma")
@@ -473,8 +473,8 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
         webView.evaluateJavaScript("window.lumaSetMedia(\(Safety.json(snapshot.json)));void 0", completionHandler: nil)
     }
     func configure(_ config: DisplayConfiguration, preferences: AppPreferences) {
-        options["fps"] = preferences.sceneFPS; options["volume"] = config.volume; options["fit"] = config.fit.rawValue
-        rendererSettings = RendererSettings(fps: preferences.sceneFPS, volume: config.volume, fit: config.fit.rawValue)
+        options["fps"] = preferences.sceneFPS; options["volume"] = config.volume; options["fit"] = config.fit.rendererValue
+        rendererSettings = RendererSettings(fps: preferences.sceneFPS, volume: config.volume, fit: config.fit.rendererValue)
         applyRendererSettings()
     }
     private func applyRendererSettings() {
@@ -730,8 +730,49 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(15)
         while !pageLoaded { try Task.checkCancellation(); guard Date() < deadline else { throw LumaError("The texture decoder did not load.") }; try await Task.sleep(for: .milliseconds(50)) }
         let value = try await webView.callAsyncJavaScript("return await window.lumaDecodeTexture(bytes)", arguments: ["bytes": bytes.base64EncodedString()], in: nil, contentWorld: .page)
-        guard let string = value as? String, let comma = string.firstIndex(of: ","), let data = Data(base64Encoded: String(string[string.index(after: comma)...])) else { throw LumaError("This scene texture could not be decoded.") }
-        return (data, string.hasPrefix("data:video/"))
+        try Task.checkCancellation()
+        guard !stopped, let result = value as? [String: Any], let kind = result["kind"] as? String,
+              ["rgba", "image", "video"].contains(kind), let base64 = result["data"] as? String else {
+            throw LumaError("The texture decoder returned an unsupported payload.")
+        }
+        let limit = (kind == "rgba" ? 128 : 64) * 1024 * 1024
+        guard !base64.isEmpty, base64.utf8.count <= ((limit + 2) / 3) * 4,
+              let data = Data(base64Encoded: base64), !data.isEmpty, data.count <= limit else {
+            throw LumaError("The texture decoder returned an empty, invalid, or oversized payload.")
+        }
+        if kind == "video" { return (data, true) }
+        let image: CGImage
+        if kind == "rgba" {
+            guard let width = result["width"] as? NSNumber, let height = result["height"] as? NSNumber,
+                  width.doubleValue.isFinite, height.doubleValue.isFinite,
+                  width.doubleValue >= 1, height.doubleValue >= 1,
+                  width.doubleValue.rounded(.towardZero) == width.doubleValue,
+                  height.doubleValue.rounded(.towardZero) == height.doubleValue,
+                  width.doubleValue * height.doubleValue <= 33_554_432 else {
+                throw LumaError("The texture decoder returned invalid RGBA dimensions.")
+            }
+            let w = width.intValue, h = height.intValue
+            guard data.count == w * h * 4, let provider = CGDataProvider(data: data as CFData),
+                  let decoded = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+                                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                                        provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) else {
+                throw LumaError("The texture decoder returned inconsistent RGBA pixels.")
+            }
+            image = decoded
+        } else {
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? NSNumber, let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+                  width.doubleValue >= 1, height.doubleValue >= 1, width.doubleValue * height.doubleValue <= 33_554_432,
+                  let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                throw LumaError("The texture decoder returned an unreadable or oversized image.")
+            }
+            image = decoded
+        }
+        guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]), png.count <= Self.maxCapturePNGBytes else {
+            throw LumaError("Luma could not encode the decoded texture within its 96 MiB PNG limit.")
+        }
+        return (png, false)
     }
     func stop() {
         guard !stopped else { return }
