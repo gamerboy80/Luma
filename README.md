@@ -4,7 +4,7 @@ A custom Swift live wallpaper app for macOS 14 and later. SwiftUI controls and A
 
 ## Run
 
-The built app is at `build/Build/Products/Release/Luma.app`. Open it, choose a Luma Original or import a video/project folder, then click **Set Wallpaper**. Wallpapers remain behind desktop icons. Closing or hiding the library leaves them running; the menu bar provides pause, resume, reload, playlist advance, and quit.
+The built app is at `build/Build/Products/Release/Luma.app`. Open it, choose a Luma Original or import a video/project folder, then click **Set Wallpaper**. Wallpapers remain behind desktop icons. Closing or hiding the library leaves them running; the menu bar provides pause, resume, reload, playlist advance, and quit. Luma runs as one process per user; launching it again brings the existing library forward. It starts as a menu-bar app and shows its Dock icon only while a Luma window is visible.
 
 Build locally with a full Xcode installation:
 

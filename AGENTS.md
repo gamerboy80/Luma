@@ -29,6 +29,7 @@ Clear Data is an uninstall-style reset of Luma's data, not the application bundl
 | `LockScreenFallbacks/` | The `.luma-owned` marker identifies Luma's prepared fallback. Remove the fallback and marker only after validating both; retain unknown files. |
 | `NativeBackups/`, `native-receipt.json` | Receipts and snapshots support restoration of Luma's changes to the selected macOS wallpaper catalog. Restore before deleting. Restore selection data only if it still matches Luma's recorded write; preserve later user changes and unknown catalog fields. |
 | UserDefaults and old container preferences | App preferences primarily live in `library.json`. Bookmark, lock-overlay, fallback, and launch-at-login tracking keys are separate; clear Luma's keys while preserving unrelated preference values. Restore the original launch-at-login state before clearing its tracking keys. |
+| Single-instance runtime lock | An empty per-user marker under macOS temporary storage is opened with `O_NOFOLLOW` and held with an `fcntl` write lock while Luma runs. Clear Data review must disclose that the OS lock is released when Luma exits; keep the marker to avoid an unlink/recreate race, and let macOS clean temporary storage. |
 | User-selected external locations | SteamCMD downloads/install files, Steam library files, Wallper originals, and files explicitly exported by the user are outside Luma's managed library. Preserve them. |
 | Temporary scene, render, and encode files | Use a unique temporary directory and guaranteed cleanup on success, failure, and cancellation. Do not mistake retained failed Workshop downloads for temporary files. |
 
@@ -37,6 +38,7 @@ When adding a new row, update this map and the in-app Clear Data review together
 ## Behavior to preserve
 
 - Wallpaper playback continues when the library window is closed or hidden. Keep Dock/window reopening and menu-bar controls usable; do not make an activation-policy change that strands the app without an accessible window or controls.
+- Luma is a single running process per user. Keep the Launch Services prohibition and runtime file lock together; a duplicate launch should open the primary instance's library. Start with accessory activation and show the Dock icon only while a Luma window is visible.
 - Imported media and editor assets are copied into Luma's managed folders. Do not move, rename, or delete Wallper originals, SteamCMD, or the Steam library.
 - Steam Workshop success imports a managed copy. Preserve failed downloads/imports for retry and report useful errors. Steam credentials are transient and must not be written to settings, logs, or process arguments.
 - Keep SceneScript review and execution as separate user actions. A scene's approval is tied to its reviewed source fingerprint; edits invalidate approval. Scripts stay off by default, editor preview must not implicitly run them, and renderer changes must preserve the existing isolation/watchdog safeguards after inspecting their implementation.

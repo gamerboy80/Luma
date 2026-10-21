@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 import ServiceManagement
+import Darwin
 
 struct ClearDataPlan {
     var remove: [String]
@@ -126,6 +127,7 @@ struct ClearDataPlan {
         if lockOverlay.enabled { restore.append("Stop Luma's experimental lock-screen windows and remove the private SkyLight space.") }
         if let login = LaunchAtLoginBaseline.clearDataDescription { restore.append(login) }
         if restore.isEmpty { restore.append("No recorded desktop image, native wallpaper selection, or launch-at-login change needs restoring.") }
+        restore.append("Release Luma's temporary single-instance lock as the app quits. Its empty marker stays in macOS temporary storage to prevent another launch racing shutdown; macOS cleans temporary files.")
         return ClearDataPlan(remove: remove, restore: restore)
     }
     func clearLumaData() async throws {
@@ -157,13 +159,67 @@ struct ClearDataPlan {
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
+    private enum InstanceLockResult {
+        case acquired
+        case alreadyRunning
+        case failed(String)
+    }
+
+    private static let openLibraryNotification = Notification.Name("dev.patrick.Luma.openLibrary")
     var model: AppModel?
-    var openLibraryWindow: (() -> Void)?
+    var openLibraryWindow: (() -> Void)? {
+        didSet {
+            guard pendingOpenLibraryRequest, openLibraryWindow != nil else { return }
+            pendingOpenLibraryRequest = false
+            DispatchQueue.main.async { [weak self] in self?.openOrFocusLibraryWindow() }
+        }
+    }
     private var lifecycleObservers: [NSObjectProtocol] = []
-    private var hasShownMainWindow = false
+    private var instanceNotificationObserver: NSObjectProtocol?
+    private var instanceLockDescriptor: Int32 = -1
+    private var pendingOpenLibraryRequest = false
+    private var isPrimaryInstance = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        instanceNotificationObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Self.openLibraryNotification,
+            object: Bundle.main.bundleIdentifier,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.isPrimaryInstance else { return }
+                self.openOrFocusLibraryWindow()
+            }
+        }
+
+        if hasOtherLumaProcess {
+            activateExistingInstance()
+            NSApp.terminate(nil)
+            return
+        }
+
+        switch acquireInstanceLock() {
+        case .acquired:
+            isPrimaryInstance = true
+            // Start as a menu-bar app. The Dock icon is added only once a Luma window is visible.
+            NSApp.setActivationPolicy(.accessory)
+        case .alreadyRunning:
+            activateExistingInstance()
+            NSApp.terminate(nil)
+        case .failed(let reason):
+            NSLog("Luma could not establish its single-instance lock: %@", reason)
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Luma could not start safely"
+                alert.informativeText = "Luma could not establish its single-instance lock. Quit the other Luma process or check access to the macOS temporary folder, then try again.\n\n\(reason)"
+                alert.alertStyle = .critical
+                alert.runModal()
+                NSApp.terminate(nil)
+            }
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
         let center = NotificationCenter.default
         let windowEvents: [Notification.Name] = [
             NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
@@ -172,35 +228,108 @@ struct ClearDataPlan {
         ]
         for event in windowEvents {
             lifecycleObservers.append(center.addObserver(forName: event, object: nil, queue: .main) { [weak self] _ in
-                self?.scheduleDockPolicyUpdate()
+                Task { @MainActor [weak self] in self?.scheduleDockPolicyUpdate() }
             })
         }
         for event in [NSApplication.didHideNotification, NSApplication.didUnhideNotification] {
             lifecycleObservers.append(center.addObserver(forName: event, object: nil, queue: .main) { [weak self] _ in
-                self?.scheduleDockPolicyUpdate()
+                Task { @MainActor [weak self] in self?.scheduleDockPolicyUpdate() }
             })
         }
+        scheduleDockPolicyUpdate()
     }
     func applicationDidBecomeActive(_ notification: Notification) { scheduleDockPolicyUpdate() }
     func windowLifecycleDidChange() { scheduleDockPolicyUpdate() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) {
+        model?.shutdown()
         lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
         lifecycleObservers.removeAll()
-        model?.shutdown()
+        if let instanceNotificationObserver {
+            DistributedNotificationCenter.default().removeObserver(instanceNotificationObserver)
+            self.instanceNotificationObserver = nil
+        }
+        // Keep the descriptor open until process exit. Closing it here would
+        // let a new launch overlap the final shutdown callbacks.
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        sender.setActivationPolicy(.regular)
-        sender.unhide(nil)
-        if !flag {
-            if let window = sender.windows.first(where: { $0.styleMask.contains(.titled) && ($0.isVisible || $0.isMiniaturized) }) {
-                if window.isMiniaturized { window.deminiaturize(nil) }
-                window.makeKeyAndOrderFront(nil)
-            } else {
-                openLibraryWindow?()
-            }
-        }
+        if !flag { openOrFocusLibraryWindow() }
         return true
+    }
+
+    private func acquireInstanceLock() -> InstanceLockResult {
+        let bundleID = Bundle.main.bundleIdentifier ?? "dev.patrick.Luma"
+        let lockURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(bundleID).\(getuid()).instance-lock", isDirectory: false)
+        let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, mode_t(S_IRUSR | S_IWUSR))
+        guard descriptor >= 0 else {
+            return .failed(String(cString: strerror(errno)))
+        }
+
+        var info = stat()
+        guard Darwin.fstat(descriptor, &info) == 0 else {
+            let reason = String(cString: strerror(errno))
+            _ = Darwin.close(descriptor)
+            return .failed(reason)
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == getuid() else {
+            _ = Darwin.close(descriptor)
+            return .failed("The lock path is not a regular file owned by this user.")
+        }
+
+        var lock = flock()
+        lock.l_type = Int16(F_WRLCK)
+        lock.l_whence = Int16(SEEK_SET)
+        guard Darwin.fcntl(descriptor, F_SETLK, &lock) == 0 else {
+            let lockError = errno
+            _ = Darwin.close(descriptor)
+            return lockError == EACCES || lockError == EAGAIN
+                ? .alreadyRunning
+                : .failed(String(cString: strerror(lockError)))
+        }
+        instanceLockDescriptor = descriptor
+        return .acquired
+    }
+
+    private func activateExistingInstance() {
+        let bundleID = Bundle.main.bundleIdentifier
+        existingLumaProcess?.activate(options: [.activateAllWindows])
+        DistributedNotificationCenter.default().post(
+            name: Self.openLibraryNotification,
+            object: bundleID,
+            userInfo: nil
+        )
+    }
+
+    private var hasOtherLumaProcess: Bool { existingLumaProcess != nil }
+
+    private var existingLumaProcess: NSRunningApplication? {
+        let bundleID = Bundle.main.bundleIdentifier
+        return NSWorkspace.shared.runningApplications.first {
+            $0.bundleIdentifier == bundleID && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && !$0.isTerminated
+        }
+    }
+
+    private func openOrFocusLibraryWindow() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.unhide(nil)
+        if let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) && ($0.isVisible || $0.isMiniaturized) }) {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        } else if let openLibraryWindow {
+            openLibraryWindow()
+        } else {
+            pendingOpenLibraryRequest = true
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        scheduleDockPolicyUpdate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+            guard let self,
+                  let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) && ($0.isVisible || $0.isMiniaturized) }) else { return }
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+            self.scheduleDockPolicyUpdate()
+        }
     }
 
     private func scheduleDockPolicyUpdate() {
@@ -211,10 +340,6 @@ struct ClearDataPlan {
         let hasVisibleLumaWindow = !NSApp.isHidden && NSApp.windows.contains {
             $0.styleMask.contains(.titled) && $0.isVisible && !$0.isMiniaturized
         }
-        if hasVisibleLumaWindow { hasShownMainWindow = true }
-        // Leave the initial Dock policy alone until SwiftUI has actually shown
-        // the first window; the WindowGroup may be created after launch callbacks.
-        guard hasShownMainWindow else { return }
         let desired: NSApplication.ActivationPolicy = hasVisibleLumaWindow ? .regular : .accessory
         guard NSApp.activationPolicy() != desired else { return }
         NSApp.setActivationPolicy(desired)
