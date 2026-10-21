@@ -1,0 +1,3586 @@
+{
+  "referenceURL": "https://docs.wallpaperengine.io/reference/lib.sceneScript.d.ts",
+  "referenceVersion": "2.8",
+  "referenceSHA256": "d9ccc5cd1383bbb91c8a589a34874833d13798d163f2b427117023ea2bfac3f4",
+  "entries": [
+    {
+      "api": "IComponent",
+      "declaration": "interface IComponent",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated."
+    },
+    {
+      "api": "IComponent.init",
+      "declaration": "init?(value: Number | Boolean | String | Vec2 | Vec3 | Vec4 | Mat4 | Mat3): Number | Boolean | String | Vec2 | Vec3 | Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated."
+    },
+    {
+      "api": "IComponent.update",
+      "declaration": "update?(value: Number | Boolean | String | Vec2 | Vec3 | Vec4 | Mat4 | Mat3): Number | Boolean | String | Vec2 | Vec3 | Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated."
+    },
+    {
+      "api": "IComponent.destroy",
+      "declaration": "destroy?(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated."
+    },
+    {
+      "api": "IComponent.resizeScreen",
+      "declaration": "resizeScreen?(size: Vec2): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated."
+    },
+    {
+      "api": "IComponent.applyUserProperties",
+      "declaration": "applyUserProperties?(changedUserProperties: Object): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated."
+    },
+    {
+      "api": "IComponent.applyGeneralSettings",
+      "declaration": "applyGeneralSettings?(changedGeneralSettings: Object): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated."
+    },
+    {
+      "api": "IComponent.cursorEnter",
+      "declaration": "cursorEnter?(event: CursorEvent): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated. Native desktop host supplies movement; global clicks through other applications are unavailable."
+    },
+    {
+      "api": "IComponent.cursorLeave",
+      "declaration": "cursorLeave?(event: CursorEvent): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated. Native desktop host supplies movement; global clicks through other applications are unavailable."
+    },
+    {
+      "api": "IComponent.cursorMove",
+      "declaration": "cursorMove?(event: CursorEvent): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated. Native desktop host supplies movement; global clicks through other applications are unavailable."
+    },
+    {
+      "api": "IComponent.cursorDown",
+      "declaration": "cursorDown?(event: CursorEvent): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated. Native desktop host supplies movement; global clicks through other applications are unavailable."
+    },
+    {
+      "api": "IComponent.cursorUp",
+      "declaration": "cursorUp?(event: CursorEvent): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated. Native desktop host supplies movement; global clicks through other applications are unavailable."
+    },
+    {
+      "api": "IComponent.cursorClick",
+      "declaration": "cursorClick?(event: CursorEvent): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: serialized and dispatched in the Worker with a host watchdog; callback values/patches are validated. Native desktop host supplies movement; global clicks through other applications are unavailable."
+    },
+    {
+      "api": "IComponent.mediaStatusChanged",
+      "declaration": "mediaStatusChanged?(event: MediaStatusEvent): void;",
+      "kind": "method",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify source and a current track required; no generic macOS Now Playing source. No fabricated track data."
+    },
+    {
+      "api": "IComponent.mediaPlaybackChanged",
+      "declaration": "mediaPlaybackChanged?(event: MediaPlaybackEvent): void;",
+      "kind": "method",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify source and a current track required; no generic macOS Now Playing source. No fabricated track data."
+    },
+    {
+      "api": "IComponent.mediaPropertiesChanged",
+      "declaration": "mediaPropertiesChanged?(event: MediaPropertiesEvent): void;",
+      "kind": "method",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify source and a current track required; no generic macOS Now Playing source. No fabricated track data."
+    },
+    {
+      "api": "IComponent.mediaThumbnailChanged",
+      "declaration": "mediaThumbnailChanged?(event: MediaThumbnailEvent): void;",
+      "kind": "method",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify source and a current track required; no generic macOS Now Playing source. No fabricated track data."
+    },
+    {
+      "api": "IComponent.mediaTimelineChanged",
+      "declaration": "mediaTimelineChanged?(event: MediaTimelineEvent): void;",
+      "kind": "method",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify source and a current track required; no generic macOS Now Playing source. No fabricated track data."
+    },
+    {
+      "api": "Vec2",
+      "declaration": "class Vec2",
+      "kind": "class",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.x",
+      "declaration": "x: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.y",
+      "declaration": "y: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.constructor",
+      "declaration": "constructor(x: Number|Vec3|String, y?: Number): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.length",
+      "declaration": "length(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.lengthSqr",
+      "declaration": "lengthSqr(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.distance",
+      "declaration": "distance(other: Vec2): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.distanceSqr",
+      "declaration": "distanceSqr(other: Vec2): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.normalize",
+      "declaration": "normalize(): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.copy",
+      "declaration": "copy(): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.equals",
+      "declaration": "equals(other: Vec2): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.isFinite",
+      "declaration": "isFinite(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.negate",
+      "declaration": "negate(): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.add",
+      "declaration": "add(value: Number|Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.subtract",
+      "declaration": "subtract(value: Number|Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.multiply",
+      "declaration": "multiply(value: Number|Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.divide",
+      "declaration": "divide(value: Number|Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.dot",
+      "declaration": "dot(value: Vec2): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.reflect",
+      "declaration": "reflect(normal: Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.perpendicular",
+      "declaration": "perpendicular(): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.project",
+      "declaration": "project(value: Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.angle",
+      "declaration": "angle(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.angleBetween",
+      "declaration": "angleBetween(value: Vec2): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.rotate",
+      "declaration": "rotate(angle: Number): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.mix",
+      "declaration": "mix(other: Vec2, amount: Number|Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.min",
+      "declaration": "min(value: Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.max",
+      "declaration": "max(value: Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.clamp",
+      "declaration": "clamp(min: Number|Vec2, max: Number|Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.abs",
+      "declaration": "abs(): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.sign",
+      "declaration": "sign(): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.round",
+      "declaration": "round(): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.floor",
+      "declaration": "floor(): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.ceil",
+      "declaration": "ceil(): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.fract",
+      "declaration": "fract(): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.mod",
+      "declaration": "mod(value: Number|Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.step",
+      "declaration": "step(edge: Number|Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.smoothStep",
+      "declaration": "smoothStep(min: Number|Vec2, max: Number|Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec2.toString",
+      "declaration": "toString(): String;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3",
+      "declaration": "class Vec3",
+      "kind": "class",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.x",
+      "declaration": "x: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.y",
+      "declaration": "y: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.z",
+      "declaration": "z: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.constructor",
+      "declaration": "constructor(x: Number|Vec2|String, y?: Number, z?: Number): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.fromSpherical",
+      "declaration": "static fromSpherical(r: Number, theta: Number, phi: Number): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.length",
+      "declaration": "length(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.lengthSqr",
+      "declaration": "lengthSqr(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.distance",
+      "declaration": "distance(other: Vec3): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.distanceSqr",
+      "declaration": "distanceSqr(other: Vec3): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.normalize",
+      "declaration": "normalize(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.copy",
+      "declaration": "copy(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.equals",
+      "declaration": "equals(other: Vec3): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.isFinite",
+      "declaration": "isFinite(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.negate",
+      "declaration": "negate(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.add",
+      "declaration": "add(value: Number|Vec2|Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.subtract",
+      "declaration": "subtract(value: Number|Vec2|Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.multiply",
+      "declaration": "multiply(value: Number|Vec2|Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.divide",
+      "declaration": "divide(value: Number|Vec2|Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.cross",
+      "declaration": "cross(value: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.dot",
+      "declaration": "dot(value: Vec3): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.reflect",
+      "declaration": "reflect(normal: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.refract",
+      "declaration": "refract(normal: Vec3, eta: Number): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.project",
+      "declaration": "project(value: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.angleBetween",
+      "declaration": "angleBetween(value: Vec3): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.toSpherical",
+      "declaration": "toSpherical(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.mix",
+      "declaration": "mix(other: Vec3, amount: Number|Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.min",
+      "declaration": "min(value: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.max",
+      "declaration": "max(value: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.clamp",
+      "declaration": "clamp(min: Number|Vec3, max: Number|Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.abs",
+      "declaration": "abs(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.sign",
+      "declaration": "sign(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.round",
+      "declaration": "round(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.floor",
+      "declaration": "floor(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.ceil",
+      "declaration": "ceil(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.fract",
+      "declaration": "fract(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.mod",
+      "declaration": "mod(value: Number|Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.step",
+      "declaration": "step(edge: Number|Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.smoothStep",
+      "declaration": "smoothStep(min: Number|Vec3, max: Number|Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec3.toString",
+      "declaration": "toString(): String;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4",
+      "declaration": "class Mat4",
+      "kind": "class",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.m",
+      "declaration": "m: Array;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.constructor",
+      "declaration": "constructor(): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.identity",
+      "declaration": "static identity(): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.fromTranslation",
+      "declaration": "static fromTranslation(v: Vec2|Vec3): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.fromScale",
+      "declaration": "static fromScale(v: Number|Vec3): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.fromRotation",
+      "declaration": "static fromRotation(angle: Number, axis: Vec3): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.fromEuler",
+      "declaration": "static fromEuler(x: Number|Vec3, y?: Number, z?: Number): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.fromBasis",
+      "declaration": "static fromBasis(right: Vec3, up: Vec3, forward: Vec3): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.lookAt",
+      "declaration": "static lookAt(eye: Vec3, center: Vec3, up: Vec3): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.compose",
+      "declaration": "static compose(translation: Vec3, rotation: Vec3, scale: Vec3): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.translation",
+      "declaration": "translation(position?: Vec2|Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.right",
+      "declaration": "right(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.up",
+      "declaration": "up(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.forward",
+      "declaration": "forward(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.add",
+      "declaration": "add(other: Mat4): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.subtract",
+      "declaration": "subtract(other: Mat4): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.multiply",
+      "declaration": "multiply(value: Mat4|Vec4|Number): Mat4|Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.translate",
+      "declaration": "translate(v: Vec2|Vec3): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.rotate",
+      "declaration": "rotate(angle: Number, axis: Vec3): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.scale",
+      "declaration": "scale(v: Number|Vec3): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.transformPoint",
+      "declaration": "transformPoint(v: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.transformDirection",
+      "declaration": "transformDirection(v: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.transpose",
+      "declaration": "transpose(): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.inverse",
+      "declaration": "inverse(): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.determinant",
+      "declaration": "determinant(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.extractEuler",
+      "declaration": "extractEuler(): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.normalMatrix",
+      "declaration": "normalMatrix(): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.decompose",
+      "declaration": "decompose(): Object;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.copy",
+      "declaration": "copy(): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.equals",
+      "declaration": "equals(other: Mat4): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat4.toString",
+      "declaration": "toString(): String;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3",
+      "declaration": "class Mat3",
+      "kind": "class",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.m",
+      "declaration": "m: Array;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.constructor",
+      "declaration": "constructor(): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.identity",
+      "declaration": "static identity(): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.fromTranslation",
+      "declaration": "static fromTranslation(v: Vec2): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.fromScale",
+      "declaration": "static fromScale(v: Number|Vec2): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.fromRotation",
+      "declaration": "static fromRotation(angle: Number): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.fromBasis",
+      "declaration": "static fromBasis(right: Vec2, up: Vec2): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.fromMat4",
+      "declaration": "static fromMat4(m: Mat4): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.compose",
+      "declaration": "static compose(translation: Vec2, rotation: Number, scale: Vec2): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.translation",
+      "declaration": "translation(position?: Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.angle",
+      "declaration": "angle(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.add",
+      "declaration": "add(other: Mat3): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.subtract",
+      "declaration": "subtract(other: Mat3): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.multiply",
+      "declaration": "multiply(value: Mat3|Vec3|Number): Mat3|Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.translate",
+      "declaration": "translate(v: Vec2): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.rotate",
+      "declaration": "rotate(angle: Number): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.scale",
+      "declaration": "scale(v: Number|Vec2): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.transformPoint",
+      "declaration": "transformPoint(v: Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.transformDirection",
+      "declaration": "transformDirection(v: Vec2): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.transpose",
+      "declaration": "transpose(): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.determinant",
+      "declaration": "determinant(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.inverse",
+      "declaration": "inverse(): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.decompose",
+      "declaration": "decompose(): Object;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.copy",
+      "declaration": "copy(): Mat3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.equals",
+      "declaration": "equals(other: Mat3): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Mat3.toString",
+      "declaration": "toString(): String;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4",
+      "declaration": "class Vec4",
+      "kind": "class",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.x",
+      "declaration": "x: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.y",
+      "declaration": "y: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.z",
+      "declaration": "z: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.w",
+      "declaration": "w: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.constructor",
+      "declaration": "constructor(x: Number|Vec2|Vec3|Vec4|String, y?: Number, z?: Number, w?: Number): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.length",
+      "declaration": "length(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.lengthSqr",
+      "declaration": "lengthSqr(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.distance",
+      "declaration": "distance(other: Vec4): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.distanceSqr",
+      "declaration": "distanceSqr(other: Vec4): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.normalize",
+      "declaration": "normalize(): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.copy",
+      "declaration": "copy(): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.equals",
+      "declaration": "equals(other: Vec4): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.isFinite",
+      "declaration": "isFinite(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.negate",
+      "declaration": "negate(): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.add",
+      "declaration": "add(value: Number|Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.subtract",
+      "declaration": "subtract(value: Number|Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.multiply",
+      "declaration": "multiply(value: Number|Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.divide",
+      "declaration": "divide(value: Number|Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.dot",
+      "declaration": "dot(value: Vec4): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.reflect",
+      "declaration": "reflect(normal: Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.project",
+      "declaration": "project(value: Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.mix",
+      "declaration": "mix(other: Vec4, amount: Number|Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.min",
+      "declaration": "min(value: Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.max",
+      "declaration": "max(value: Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.clamp",
+      "declaration": "clamp(min: Number|Vec4, max: Number|Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.abs",
+      "declaration": "abs(): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.sign",
+      "declaration": "sign(): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.round",
+      "declaration": "round(): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.floor",
+      "declaration": "floor(): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.ceil",
+      "declaration": "ceil(): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.fract",
+      "declaration": "fract(): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.mod",
+      "declaration": "mod(value: Number|Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.step",
+      "declaration": "step(edge: Number|Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.smoothStep",
+      "declaration": "smoothStep(min: Number|Vec4, max: Number|Vec4): Vec4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "Vec4.toString",
+      "declaration": "toString(): String;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "CameraTransforms",
+      "declaration": "class CameraTransforms",
+      "kind": "class",
+      "status": "implemented",
+      "detail": "Layer: Vec3 eye/center and zoom read/write through bounded camera snapshots; renderer applies host-timestamped camera override."
+    },
+    {
+      "api": "CameraTransforms.eye",
+      "declaration": "eye: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: Vec3 eye/center and zoom read/write through bounded camera snapshots; renderer applies host-timestamped camera override."
+    },
+    {
+      "api": "CameraTransforms.center",
+      "declaration": "center: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: Vec3 eye/center and zoom read/write through bounded camera snapshots; renderer applies host-timestamped camera override."
+    },
+    {
+      "api": "CameraTransforms.up",
+      "declaration": "up: Vec3;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Renderer uses a fixed camera up vector; arbitrary camera up orientation is unavailable."
+    },
+    {
+      "api": "CameraTransforms.zoom",
+      "declaration": "zoom: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: Vec3 eye/center and zoom read/write through bounded camera snapshots; renderer applies host-timestamped camera override."
+    },
+    {
+      "api": "AnimationEvent",
+      "declaration": "class AnimationEvent",
+      "kind": "class",
+      "status": "implemented",
+      "detail": "Event: bounded callback payload; cursor world/local positions revived as Vec3, animation name/frame preserved."
+    },
+    {
+      "api": "AnimationEvent.name",
+      "declaration": "name: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded callback payload; cursor world/local positions revived as Vec3, animation name/frame preserved."
+    },
+    {
+      "api": "AnimationEvent.frame",
+      "declaration": "frame: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded callback payload; cursor world/local positions revived as Vec3, animation name/frame preserved."
+    },
+    {
+      "api": "CursorEvent",
+      "declaration": "class CursorEvent",
+      "kind": "class",
+      "status": "implemented",
+      "detail": "Event: bounded callback payload; cursor world/local positions revived as Vec3, animation name/frame preserved."
+    },
+    {
+      "api": "CursorEvent.worldPosition",
+      "declaration": "worldPosition: Vec3",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded callback payload; cursor world/local positions revived as Vec3, animation name/frame preserved."
+    },
+    {
+      "api": "CursorEvent.localPosition",
+      "declaration": "localPosition: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded callback payload; cursor world/local positions revived as Vec3, animation name/frame preserved."
+    },
+    {
+      "api": "CursorEvent.hitBox",
+      "declaration": "hitBox?: String;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Renderer hit testing does not supply named model hit boxes; field remains absent."
+    },
+    {
+      "api": "MediaPropertiesEvent",
+      "declaration": "class MediaPropertiesEvent",
+      "kind": "class",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaPropertiesEvent.title",
+      "declaration": "title: String;",
+      "kind": "property",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaPropertiesEvent.artist",
+      "declaration": "artist: String;",
+      "kind": "property",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaPropertiesEvent.subTitle",
+      "declaration": "subTitle: String;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Fixed native metadata query does not provide this field; absent/empty with provider limitation diagnostic."
+    },
+    {
+      "api": "MediaPropertiesEvent.albumTitle",
+      "declaration": "albumTitle: String;",
+      "kind": "property",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaPropertiesEvent.albumArtist",
+      "declaration": "albumArtist: String;",
+      "kind": "property",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaPropertiesEvent.genres",
+      "declaration": "genres: String;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Fixed native metadata query does not provide this field; absent/empty with provider limitation diagnostic."
+    },
+    {
+      "api": "MediaPropertiesEvent.contentType",
+      "declaration": "contentType: String;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Fixed native metadata query does not provide this field; absent/empty with provider limitation diagnostic."
+    },
+    {
+      "api": "MediaThumbnailEvent",
+      "declaration": "class MediaThumbnailEvent",
+      "kind": "class",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaThumbnailEvent.hasThumbnail",
+      "declaration": "hasThumbnail: Boolean;",
+      "kind": "property",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaThumbnailEvent.primaryColor",
+      "declaration": "primaryColor: Vec3;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Music/Spotify provider does not retrieve artwork or derive artwork colors. No colors should be treated as album-derived; diagnostic states unavailable."
+    },
+    {
+      "api": "MediaThumbnailEvent.secondaryColor",
+      "declaration": "secondaryColor: Vec3;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Music/Spotify provider does not retrieve artwork or derive artwork colors. No colors should be treated as album-derived; diagnostic states unavailable."
+    },
+    {
+      "api": "MediaThumbnailEvent.tertiaryColor",
+      "declaration": "tertiaryColor: Vec3;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Music/Spotify provider does not retrieve artwork or derive artwork colors. No colors should be treated as album-derived; diagnostic states unavailable."
+    },
+    {
+      "api": "MediaThumbnailEvent.textColor",
+      "declaration": "textColor: Vec3;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Music/Spotify provider does not retrieve artwork or derive artwork colors. No colors should be treated as album-derived; diagnostic states unavailable."
+    },
+    {
+      "api": "MediaThumbnailEvent.highContrastColor",
+      "declaration": "highContrastColor: Vec3;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Music/Spotify provider does not retrieve artwork or derive artwork colors. No colors should be treated as album-derived; diagnostic states unavailable."
+    },
+    {
+      "api": "MediaPlaybackEvent",
+      "declaration": "class MediaPlaybackEvent",
+      "kind": "class",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaPlaybackEvent.state",
+      "declaration": "state: Number;",
+      "kind": "property",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaPlaybackEvent.PLAYBACK_STOPPED",
+      "declaration": "static readonly PLAYBACK_STOPPED: Number = 0;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: frozen numeric playback-state enum (0 stopped, 1 playing, 2 paused)."
+    },
+    {
+      "api": "MediaPlaybackEvent.PLAYBACK_PLAYING",
+      "declaration": "static readonly PLAYBACK_PLAYING: Number = 1;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: frozen numeric playback-state enum (0 stopped, 1 playing, 2 paused)."
+    },
+    {
+      "api": "MediaPlaybackEvent.PLAYBACK_PAUSED",
+      "declaration": "static readonly PLAYBACK_PAUSED: Number = 2;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: frozen numeric playback-state enum (0 stopped, 1 playing, 2 paused)."
+    },
+    {
+      "api": "MediaTimelineEvent",
+      "declaration": "class MediaTimelineEvent",
+      "kind": "class",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaTimelineEvent.position",
+      "declaration": "position: Number;",
+      "kind": "property",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaTimelineEvent.duration",
+      "declaration": "duration: Number;",
+      "kind": "property",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaStatusEvent",
+      "declaration": "class MediaStatusEvent",
+      "kind": "class",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "MediaStatusEvent.enabled",
+      "declaration": "enabled: Boolean;",
+      "kind": "property",
+      "status": "external provider",
+      "detail": "Event: real selected Music/Spotify metadata; strings/numbers bounded; playback constants available independently."
+    },
+    {
+      "api": "WEMath",
+      "declaration": "declare module 'WEMath'",
+      "kind": "module",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEMath.smoothStep",
+      "declaration": "export function smoothStep(min: Number, max: Number, value: Number): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEMath.mix",
+      "declaration": "export function mix(a: Number, b: Number, value: Number): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEMath.deg2rad",
+      "declaration": "export let deg2rad: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEMath.rad2deg",
+      "declaration": "export let rad2deg: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEVector",
+      "declaration": "declare module 'WEVector'",
+      "kind": "module",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEVector.angleVector2",
+      "declaration": "export function angleVector2(angle: Number): Vec2;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEVector.vectorAngle2",
+      "declaration": "export function vectorAngle2(direction: Vec2): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEColor",
+      "declaration": "declare module 'WEColor'",
+      "kind": "module",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEColor.rgb2hsv",
+      "declaration": "export function rgb2hsv(rgb: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEColor.hsv2rgb",
+      "declaration": "export function hsv2rgb(hsv: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEColor.normalizeColor",
+      "declaration": "export function normalizeColor(rgb: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "WEColor.expandColor",
+      "declaration": "export function expandColor(rgb: Vec3): Vec3;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure: compartment math; vectors retain methods. Matrix Euler/decomposition limits apply for shear/reflection/degenerate inputs."
+    },
+    {
+      "api": "AudioBuffers",
+      "declaration": "class AudioBuffers",
+      "kind": "class",
+      "status": "implemented",
+      "detail": "Bounded, stable Float32Array channels at 16/32/64 samples update from Luma’s active audio source: optional live system capture, wallpaper audio, deterministic fallback, or silence when audio is disabled. The bridge does not invent song metadata."
+    },
+    {
+      "api": "AudioBuffers.left",
+      "declaration": "left: Float32Array;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Bounded, stable Float32Array channels at 16/32/64 samples update from Luma’s active audio source: optional live system capture, wallpaper audio, deterministic fallback, or silence when audio is disabled. The bridge does not invent song metadata."
+    },
+    {
+      "api": "AudioBuffers.right",
+      "declaration": "right: Float32Array;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Bounded, stable Float32Array channels at 16/32/64 samples update from Luma’s active audio source: optional live system capture, wallpaper audio, deterministic fallback, or silence when audio is disabled. The bridge does not invent song metadata."
+    },
+    {
+      "api": "AudioBuffers.average",
+      "declaration": "average: Float32Array;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Bounded, stable Float32Array channels at 16/32/64 samples update from Luma’s active audio source: optional live system capture, wallpaper audio, deterministic fallback, or silence when audio is disabled. The bridge does not invent song metadata."
+    },
+    {
+      "api": "IObject",
+      "declaration": "interface IObject",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer/command: bound property or existing named layer animation. Missing controllers report unavailable. Effect/material/nested clip animations are unsupported."
+    },
+    {
+      "api": "IObject.getAnimation",
+      "declaration": "getAnimation(name?: String): IAnimation;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: bound property or existing named layer animation. Missing controllers report unavailable. Effect/material/nested clip animations are unsupported."
+    },
+    {
+      "api": "IThisPropertyObjectBase",
+      "declaration": "interface IThisPropertyObjectBase extends IObject",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer/command: bound property or existing named layer animation. Missing controllers report unavailable. Effect/material/nested clip animations are unsupported."
+    },
+    {
+      "api": "IMaterial",
+      "declaration": "interface IMaterial extends IObject",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer: existing numeric shader constants through validated material passes; scalar/Vec2/Vec3/Vec4 assignments and component write-back. Unknown constants rejected. Inherited getAnimation is unsupported."
+    },
+    {
+      "api": "IEffect",
+      "declaration": "interface IEffect extends IObject",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer: decoded effect visibility/name and existing material-pass constants; no dummy material bags."
+    },
+    {
+      "api": "IEffect.getMaterial",
+      "declaration": "getMaterial(index: Number): IMaterial;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: decoded effect visibility/name and existing material-pass constants; no dummy material bags."
+    },
+    {
+      "api": "IEffect.getMaterialCount",
+      "declaration": "getMaterialCount(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: decoded effect visibility/name and existing material-pass constants; no dummy material bags."
+    },
+    {
+      "api": "IEffect.setMaterialProperty",
+      "declaration": "setMaterialProperty(propertyName: String, value: Number|Vec2|Vec3|Vec4): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: decoded effect visibility/name and existing material-pass constants; no dummy material bags."
+    },
+    {
+      "api": "IEffect.executeMaterialFunction",
+      "declaration": "executeMaterialFunction(propertyName: String): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Renderer exposes no safe custom material render-function dispatcher. Explicit unavailable error."
+    },
+    {
+      "api": "IEffect.visible",
+      "declaration": "visible: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: decoded effect visibility/name and existing material-pass constants; no dummy material bags."
+    },
+    {
+      "api": "IEffect.name",
+      "declaration": "name: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: decoded effect visibility/name and existing material-pass constants; no dummy material bags."
+    },
+    {
+      "api": "ITextureAnimation",
+      "declaration": "interface ITextureAnimation",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ITextureAnimation.frameCount",
+      "declaration": "readonly frameCount: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ITextureAnimation.duration",
+      "declaration": "readonly duration: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ITextureAnimation.rate",
+      "declaration": "rate: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ITextureAnimation.play",
+      "declaration": "play(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ITextureAnimation.pause",
+      "declaration": "pause(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ITextureAnimation.stop",
+      "declaration": "stop(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ITextureAnimation.isPlaying",
+      "declaration": "isPlaying(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ITextureAnimation.getFrame",
+      "declaration": "getFrame(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ITextureAnimation.setFrame",
+      "declaration": "setFrame(frame: Number): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ITextureAnimation.join",
+      "declaration": "join(): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Synchronous blocking until animation completion is incompatible with bounded worker event execution. Use state/events."
+    },
+    {
+      "api": "IVideoTexture",
+      "declaration": "interface IVideoTexture",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IVideoTexture.duration",
+      "declaration": "readonly duration: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IVideoTexture.rate",
+      "declaration": "rate: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IVideoTexture.loop",
+      "declaration": "loop: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IVideoTexture.play",
+      "declaration": "play(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IVideoTexture.pause",
+      "declaration": "pause(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IVideoTexture.stop",
+      "declaration": "stop(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IVideoTexture.isPlaying",
+      "declaration": "isPlaying(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IVideoTexture.getCurrentTime",
+      "declaration": "getCurrentTime(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IVideoTexture.setCurrentTime",
+      "declaration": "setCurrentTime(time: Number): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IVideoTexture.addEndedCallback",
+      "declaration": "addEndedCallback(callback: Function): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Renderer decoder/clip completion callbacks are not transported as Worker events. Explicit unavailable error."
+    },
+    {
+      "api": "IAnimationLayer",
+      "declaration": "interface IAnimationLayer extends IObject",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.fps",
+      "declaration": "readonly fps: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.frameCount",
+      "declaration": "readonly frameCount: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.duration",
+      "declaration": "readonly duration: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.name",
+      "declaration": "name: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable. Reads supported; clip identity renaming is unavailable."
+    },
+    {
+      "api": "IAnimationLayer.rate",
+      "declaration": "rate: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.blend",
+      "declaration": "blend: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.visible",
+      "declaration": "visible: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.play",
+      "declaration": "play(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.pause",
+      "declaration": "pause(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.stop",
+      "declaration": "stop(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.isPlaying",
+      "declaration": "isPlaying(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.getFrame",
+      "declaration": "getFrame(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.setFrame",
+      "declaration": "setFrame(frame: Number): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimationLayer.addEndedCallback",
+      "declaration": "addEndedCallback(callback: Function): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Renderer decoder/clip completion callbacks are not transported as Worker events. Explicit unavailable error."
+    },
+    {
+      "api": "ISoundLayer",
+      "declaration": "interface ISoundLayer",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ISoundLayer.isPlaying",
+      "declaration": "isPlaying(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ISoundLayer.play",
+      "declaration": "play(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ISoundLayer.stop",
+      "declaration": "stop(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ISoundLayer.pause",
+      "declaration": "pause(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "ISoundLayer.volume",
+      "declaration": "volume: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IEffectLayer",
+      "declaration": "interface IEffectLayer",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IEffectLayer.getEffect",
+      "declaration": "getEffect(name: String|Number): IEffect;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IEffectLayer.getEffectCount",
+      "declaration": "getEffectCount(): Number",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IEffectLayer.transformAttachmentToTexture",
+      "declaration": "transformAttachmentToTexture(attachmentLayer:String|Number|ILayer, attachmentName: String|Number): Mat3;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IEffectLayer.size",
+      "declaration": "readonly size: Vec2;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IEffectLayer.perspective",
+      "declaration": "perspective: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IEffectLayer.solid",
+      "declaration": "solid: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer",
+      "declaration": "interface ITextLayer",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.text",
+      "declaration": "text: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.color",
+      "declaration": "color: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.alpha",
+      "declaration": "alpha: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.opaquebackground",
+      "declaration": "opaquebackground: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.backgroundcolor",
+      "declaration": "backgroundcolor: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.pointsize",
+      "declaration": "pointsize: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.font",
+      "declaration": "font: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.padding",
+      "declaration": "padding: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.horizontalalign",
+      "declaration": "horizontalalign: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.verticalalign",
+      "declaration": "verticalalign: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.anchor",
+      "declaration": "anchor: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.limitrows",
+      "declaration": "limitrows: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.maxrows",
+      "declaration": "maxrows: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.limitwidth",
+      "declaration": "limitwidth: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ITextLayer.maxwidth",
+      "declaration": "maxwidth: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IParticleSystemInstance",
+      "declaration": "interface IParticleSystemInstance",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Per-layer shared state and live typed properties; bounded host commands apply scalar multipliers, normalized color, and existing control points. Renderer/backend limits are recorded per member."
+    },
+    {
+      "api": "IParticleSystemInstance.alpha",
+      "declaration": "alpha: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Command: bounded numeric multipliers to renderer particle overrides, state shared per layer across scripts."
+    },
+    {
+      "api": "IParticleSystemInstance.size",
+      "declaration": "size: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Command: bounded numeric multipliers to renderer particle overrides, state shared per layer across scripts."
+    },
+    {
+      "api": "IParticleSystemInstance.count",
+      "declaration": "count: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Command: bounded numeric multipliers to renderer particle overrides, state shared per layer across scripts."
+    },
+    {
+      "api": "IParticleSystemInstance.speed",
+      "declaration": "speed: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Command: bounded numeric multipliers to renderer particle overrides, state shared per layer across scripts."
+    },
+    {
+      "api": "IParticleSystemInstance.lifetime",
+      "declaration": "lifetime: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Command: bounded numeric multipliers to renderer particle overrides, state shared per layer across scripts."
+    },
+    {
+      "api": "IParticleSystemInstance.rate",
+      "declaration": "rate: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Command: bounded numeric multipliers to renderer particle overrides, state shared per layer across scripts."
+    },
+    {
+      "api": "IParticleSystemInstance.colorn",
+      "declaration": "colorn: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Finite normalized scalar 0..1 or Vec3 color writes reach the particle backend; host validates range, layer identity and rate. Renderer currently applies the value to new particles."
+    },
+    {
+      "api": "IParticleSystemInstance.controlpoint0",
+      "declaration": "controlpoint0: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Vec3 snapshots and component write-back for existing control points 0..7; host limits coordinates and verifies the live particle layer/backend. Missing points are diagnosed."
+    },
+    {
+      "api": "IParticleSystemInstance.controlpoint1",
+      "declaration": "controlpoint1: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Vec3 snapshots and component write-back for existing control points 0..7; host limits coordinates and verifies the live particle layer/backend. Missing points are diagnosed."
+    },
+    {
+      "api": "IParticleSystemInstance.controlpoint2",
+      "declaration": "controlpoint2: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Vec3 snapshots and component write-back for existing control points 0..7; host limits coordinates and verifies the live particle layer/backend. Missing points are diagnosed."
+    },
+    {
+      "api": "IParticleSystemInstance.controlpoint3",
+      "declaration": "controlpoint3: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Vec3 snapshots and component write-back for existing control points 0..7; host limits coordinates and verifies the live particle layer/backend. Missing points are diagnosed."
+    },
+    {
+      "api": "IParticleSystemInstance.controlpoint4",
+      "declaration": "controlpoint4: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Vec3 snapshots and component write-back for existing control points 0..7; host limits coordinates and verifies the live particle layer/backend. Missing points are diagnosed."
+    },
+    {
+      "api": "IParticleSystemInstance.controlpoint5",
+      "declaration": "controlpoint5: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Vec3 snapshots and component write-back for existing control points 0..7; host limits coordinates and verifies the live particle layer/backend. Missing points are diagnosed."
+    },
+    {
+      "api": "IParticleSystemInstance.controlpoint6",
+      "declaration": "controlpoint6: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Vec3 snapshots and component write-back for existing control points 0..7; host limits coordinates and verifies the live particle layer/backend. Missing points are diagnosed."
+    },
+    {
+      "api": "IParticleSystemInstance.controlpoint7",
+      "declaration": "controlpoint7: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Vec3 snapshots and component write-back for existing control points 0..7; host limits coordinates and verifies the live particle layer/backend. Missing points are diagnosed."
+    },
+    {
+      "api": "IParticleSystem",
+      "declaration": "interface IParticleSystem",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer/command: emission pause/resume, pool-clearing stop, bounded burst emission and numeric instance multipliers; decoded particle layer required."
+    },
+    {
+      "api": "IParticleSystem.play",
+      "declaration": "play(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: emission pause/resume, pool-clearing stop, bounded burst emission and numeric instance multipliers; decoded particle layer required."
+    },
+    {
+      "api": "IParticleSystem.pause",
+      "declaration": "pause(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: emission pause/resume, pool-clearing stop, bounded burst emission and numeric instance multipliers; decoded particle layer required."
+    },
+    {
+      "api": "IParticleSystem.stop",
+      "declaration": "stop(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: emission pause/resume, pool-clearing stop, bounded burst emission and numeric instance multipliers; decoded particle layer required."
+    },
+    {
+      "api": "IParticleSystem.isPlaying",
+      "declaration": "isPlaying(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: emission pause/resume, pool-clearing stop, bounded burst emission and numeric instance multipliers; decoded particle layer required."
+    },
+    {
+      "api": "IParticleSystem.emitParticles",
+      "declaration": "emitParticles(count?: Number): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: emission pause/resume, pool-clearing stop, bounded burst emission and numeric instance multipliers; decoded particle layer required."
+    },
+    {
+      "api": "IParticleSystem.instance",
+      "declaration": "instance: IParticleSystemInstance;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: emission pause/resume, pool-clearing stop, bounded burst emission and numeric instance multipliers; decoded particle layer required."
+    },
+    {
+      "api": "IImageLayer",
+      "declaration": "interface IImageLayer",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IImageLayer.alpha",
+      "declaration": "alpha: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IImageLayer.color",
+      "declaration": "color: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IImageLayer.alignment",
+      "declaration": "alignment: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IImageLayer.getTextureAnimation",
+      "declaration": "getTextureAnimation(): ITextureAnimation;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IImageLayer.getVideoTexture",
+      "declaration": "getVideoTexture(): IVideoTexture;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IImageLayer.getAnimationLayerCount",
+      "declaration": "getAnimationLayerCount(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IImageLayer.getAnimationLayer",
+      "declaration": "getAnimationLayer(name: String|Number): IAnimationLayer;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IImageLayer.createAnimationLayer",
+      "declaration": "createAnimationLayer(animation: String|Object, config?: Object): IAnimationLayer;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Dynamic clip definitions/lifecycle are not transported/validated by current model bridge. Existing clips can be controlled; explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.playSingleAnimation",
+      "declaration": "playSingleAnimation(animation: String|Object, config?: Object): IAnimationLayer;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Dynamic clip definitions/lifecycle are not transported/validated by current model bridge. Existing clips can be controlled; explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.destroyAnimationLayer",
+      "declaration": "destroyAnimationLayer(animationLayer: String|Object|IAnimationLayer): Boolean;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Dynamic clip definitions/lifecycle are not transported/validated by current model bridge. Existing clips can be controlled; explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.getBoneCount",
+      "declaration": "getBoneCount(): Number;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.getBoneTransform",
+      "declaration": "getBoneTransform(bone: String|Number): Mat4;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "The official Mat4 contract is unsupported and diagnosed. WebWallGL has an older translation-only puppet path; it is not exposed as a Mat4."
+    },
+    {
+      "api": "IImageLayer.setBoneTransform",
+      "declaration": "setBoneTransform(bone: String|Number, transform: Mat4): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.getLocalBoneTransform",
+      "declaration": "getLocalBoneTransform(bone: String|Number): Mat4;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.setLocalBoneTransform",
+      "declaration": "setLocalBoneTransform(bone: String|Number, transform: Mat4): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.getLocalBoneAngles",
+      "declaration": "getLocalBoneAngles(bone: String|Number): Vec3;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.setLocalBoneAngles",
+      "declaration": "setLocalBoneAngles(bone: String|Number, angles: Vec3): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.getLocalBoneOrigin",
+      "declaration": "getLocalBoneOrigin(bone: String|Number): Vec3;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.setLocalBoneOrigin",
+      "declaration": "setLocalBoneOrigin(bone: String|Number, origin: Vec3): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.getBoneIndex",
+      "declaration": "getBoneIndex(name: String): Number;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.getBoneParentIndex",
+      "declaration": "getBoneParentIndex(child: Number|String): Number;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.applyBonePhysicsImpulse",
+      "declaration": "applyBonePhysicsImpulse(bone?: String|Number, directionalImpulse: Vec3, angularImpulse: Vec3): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.resetBonePhysicsSimulation",
+      "declaration": "resetBonePhysicsSimulation(bone?: String|Number): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.getBlendShapeIndex",
+      "declaration": "getBlendShapeIndex(name: String): Number;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.getBlendShapeWeight",
+      "declaration": "getBlendShapeWeight(blendShape: String|Number): Number;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IImageLayer.setBlendShapeWeight",
+      "declaration": "setBlendShapeWeight(blendShape: String|Number, weight: Number): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "IModelLayer",
+      "declaration": "interface IModelLayer",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IModelLayer.perspective",
+      "declaration": "perspective: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IModelLayer.rootmotion",
+      "declaration": "rootmotion: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IModelLayer.getAnimationLayerCount",
+      "declaration": "getAnimationLayerCount(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IModelLayer.getAnimationLayer",
+      "declaration": "getAnimationLayer(name: String|Number): IAnimationLayer;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IModelLayer.createAnimationLayer",
+      "declaration": "createAnimationLayer(animation: String|Object): IAnimationLayer;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Dynamic clip definitions/lifecycle are not transported/validated by current model bridge. Existing clips can be controlled; explicit unavailable error."
+    },
+    {
+      "api": "IModelLayer.playSingleAnimation",
+      "declaration": "playSingleAnimation(animation: String|Object, config?: Object): IAnimationLayer;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Dynamic clip definitions/lifecycle are not transported/validated by current model bridge. Existing clips can be controlled; explicit unavailable error."
+    },
+    {
+      "api": "IModelLayer.destroyAnimationLayer",
+      "declaration": "destroyAnimationLayer(animationLayer: String|Object|IAnimationLayer): Boolean;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Dynamic clip definitions/lifecycle are not transported/validated by current model bridge. Existing clips can be controlled; explicit unavailable error."
+    },
+    {
+      "api": "ICamera",
+      "declaration": "interface ICamera",
+      "kind": "interface",
+      "status": "unsupported",
+      "detail": "Per-layer camera projection is not bridged; use supported scene settings/camera transforms where applicable."
+    },
+    {
+      "api": "ICamera.fov",
+      "declaration": "fov: Number;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Per-layer camera projection is not bridged; use supported scene settings/camera transforms where applicable."
+    },
+    {
+      "api": "ICamera.zoom",
+      "declaration": "zoom: Number;",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "Per-layer camera projection is not bridged; use supported scene settings/camera transforms where applicable."
+    },
+    {
+      "api": "IModelData",
+      "declaration": "interface IModelData extends IObject",
+      "kind": "interface",
+      "status": "unsupported",
+      "detail": "No dynamic geometry buffer or render-context capabilities cross the Worker boundary. Explicit diagnostic; no host/native context."
+    },
+    {
+      "api": "IModelData.applyData",
+      "declaration": "applyData(shapes: Object|Array): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "No dynamic geometry buffer or render-context capabilities cross the Worker boundary. Explicit diagnostic; no host/native context."
+    },
+    {
+      "api": "IModelData.replaceData",
+      "declaration": "replaceData(shapes: Object|Array): void;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "No dynamic geometry buffer or render-context capabilities cross the Worker boundary. Explicit diagnostic; no host/native context."
+    },
+    {
+      "api": "IModelData.POSITION",
+      "declaration": "readonly POSITION: String = 'position';",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "No dynamic geometry buffer or render-context capabilities cross the Worker boundary. Explicit diagnostic; no host/native context."
+    },
+    {
+      "api": "IModelData.NORMAL",
+      "declaration": "readonly NORMAL: String = 'normal';",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "No dynamic geometry buffer or render-context capabilities cross the Worker boundary. Explicit diagnostic; no host/native context."
+    },
+    {
+      "api": "IModelData.TANGENT_SIGNED",
+      "declaration": "readonly TANGENT_SIGNED: String = 'tangentSigned';",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "No dynamic geometry buffer or render-context capabilities cross the Worker boundary. Explicit diagnostic; no host/native context."
+    },
+    {
+      "api": "IModelData.UV",
+      "declaration": "readonly UV: String = 'uv';",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "No dynamic geometry buffer or render-context capabilities cross the Worker boundary. Explicit diagnostic; no host/native context."
+    },
+    {
+      "api": "IModelData.COLOR",
+      "declaration": "readonly COLOR: String = 'color';",
+      "kind": "property",
+      "status": "unsupported",
+      "detail": "No dynamic geometry buffer or render-context capabilities cross the Worker boundary. Explicit diagnostic; no host/native context."
+    },
+    {
+      "api": "ILayer",
+      "declaration": "interface ILayer extends IObject, IImageLayer, ISoundLayer, IEffectLayer, ITextLayer, IParticleSystem, IModel, ICamera",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.origin",
+      "declaration": "origin: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.angles",
+      "declaration": "angles: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.scale",
+      "declaration": "scale: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.parallaxDepth",
+      "declaration": "parallaxDepth: Vec2;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.name",
+      "declaration": "name: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.visible",
+      "declaration": "visible: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.getTransformMatrix",
+      "declaration": "getTransformMatrix(): Mat4;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.rotateObjectSpace",
+      "declaration": "rotateObjectSpace(angles: Vec3): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.lookAt",
+      "declaration": "lookAt(center: Vec3, up?: Vec3): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.lookAtYaw",
+      "declaration": "lookAtYaw(center: Vec3, up?: Vec3): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.setParent",
+      "declaration": "setParent(parent: String|Number|ILayer, adjustTransforms?: Boolean): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.setParent.overload2",
+      "declaration": "setParent(parent: String|Number|ILayer, attachment: String|Number, adjustTransform?: Boolean): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.getParent",
+      "declaration": "getParent(): ILayer;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.getChildren",
+      "declaration": "getChildren(): [ILayer];",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "ILayer.getAttachmentIndex",
+      "declaration": "getAttachmentIndex(name: String): Number;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "ILayer.getAttachmentMatrix",
+      "declaration": "getAttachmentMatrix(attachment: String|Number): Mat4;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "ILayer.getAttachmentOrigin",
+      "declaration": "getAttachmentOrigin(attachment: String|Number): Vec3;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "ILayer.getAttachmentAngles",
+      "declaration": "getAttachmentAngles(attachment: String|Number): Vec3;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Model bone matrices, blend shapes, named attachments and physics are not serialized by current backend/bridge. Explicit unavailable error."
+    },
+    {
+      "api": "global.thisLayer",
+      "declaration": "declare let thisLayer: ILayer;",
+      "kind": "global",
+      "status": "implemented",
+      "detail": "Compartment-owned API facade; Worker snapshots/commands only, no ambient native/DOM/network capabilities."
+    },
+    {
+      "api": "IScene",
+      "declaration": "interface IScene",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.getLayer",
+      "declaration": "getLayer(name: String|Number): ILayer;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.getLayerByID",
+      "declaration": "getLayerByID(id: String): ILayer;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.getLayerCount",
+      "declaration": "getLayerCount(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.enumerateLayers",
+      "declaration": "enumerateLayers(): [ILayer];",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.destroyLayer",
+      "declaration": "destroyLayer(layer: String|Number|ILayer): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.createLayer",
+      "declaration": "createLayer(configuration: String|Object|IAssetHandle|IModelData): ILayer;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.sortLayer",
+      "declaration": "sortLayer(layer: String|Number|ILayer, index: Number): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.getLayerIndex",
+      "declaration": "getLayerIndex(layer: String|ILayer): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.getInitialLayerConfig",
+      "declaration": "getInitialLayerConfig(layer: String|Number|ILayer): Object;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.getCameraTransforms",
+      "declaration": "getCameraTransforms(): CameraTransforms;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.setCameraTransforms",
+      "declaration": "setCameraTransforms(cameraTransforms: CameraTransforms): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.getAnimation",
+      "declaration": "getAnimation(name?: String): IAnimation;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.createModelData",
+      "declaration": "createModelData(configuration: Object): IModelData;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Dynamic model vertex/index buffers are not bridged to renderer. Explicit unavailable error."
+    },
+    {
+      "api": "IScene.destroyModelData",
+      "declaration": "destroyModelData(modelDataHandle: IModelData);",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "Dynamic model vertex/index buffers are not bridged to renderer. Explicit unavailable error."
+    },
+    {
+      "api": "IScene.bloom",
+      "declaration": "bloom: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.bloomstrength",
+      "declaration": "bloomstrength: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.bloomthreshold",
+      "declaration": "bloomthreshold: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.clearenabled",
+      "declaration": "clearenabled: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.clearcolor",
+      "declaration": "clearcolor: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.ambientcolor",
+      "declaration": "ambientcolor: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.skylightcolor",
+      "declaration": "skylightcolor: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.fov",
+      "declaration": "fov: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.nearz",
+      "declaration": "nearz: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.farz",
+      "declaration": "farz: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.camerafade",
+      "declaration": "camerafade: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.camerashake",
+      "declaration": "camerashake: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.camerashakespeed",
+      "declaration": "camerashakespeed: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.camerashakeamplitude",
+      "declaration": "camerashakeamplitude: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.camerashakeroughness",
+      "declaration": "camerashakeroughness: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.cameraparallax",
+      "declaration": "cameraparallax: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.cameraparallaxamount",
+      "declaration": "cameraparallaxamount: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.cameraparallaxdelay",
+      "declaration": "cameraparallaxdelay: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "IScene.cameraparallaxmouseinfluence",
+      "declaration": "cameraparallaxmouseinfluence: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: live scene settings, validated layer identity/hierarchy/order and supported renderer factory definitions; creation asynchronous, factory failures diagnosed."
+    },
+    {
+      "api": "global.thisScene",
+      "declaration": "declare let thisScene: IScene;",
+      "kind": "global",
+      "status": "implemented",
+      "detail": "Compartment-owned API facade; Worker snapshots/commands only, no ambient native/DOM/network capabilities."
+    },
+    {
+      "api": "IConsole",
+      "declaration": "interface IConsole",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Command: bounded diagnostics, 5 log messages/second; max 1600 characters/message, no host console or native handle."
+    },
+    {
+      "api": "IConsole.log",
+      "declaration": "log(...name: any): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Command: bounded diagnostics, 5 log messages/second; max 1600 characters/message, no host console or native handle."
+    },
+    {
+      "api": "IConsole.error",
+      "declaration": "error(...name: any): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Command: bounded diagnostics, 5 log messages/second; max 1600 characters/message, no host console or native handle."
+    },
+    {
+      "api": "global.console",
+      "declaration": "declare let console: IConsole;",
+      "kind": "global",
+      "status": "implemented",
+      "detail": "Command: bounded diagnostics, 5 log messages/second; max 1600 characters/message, no host console or native handle."
+    },
+    {
+      "api": "IRenderContext",
+      "declaration": "interface IRenderContext",
+      "kind": "interface",
+      "status": "unsupported",
+      "detail": "No dynamic geometry buffer or render-context capabilities cross the Worker boundary. Explicit diagnostic; no host/native context."
+    },
+    {
+      "api": "global.renderContext",
+      "declaration": "declare let renderContext: IRenderContext;",
+      "kind": "global",
+      "status": "unsupported",
+      "detail": "No dynamic geometry buffer or render-context capabilities cross the Worker boundary. Explicit diagnostic; no host/native context."
+    },
+    {
+      "api": "IInput",
+      "declaration": "interface IInput",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IInput.cursorWorldPosition",
+      "declaration": "cursorWorldPosition: Vec3;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IInput.cursorScreenPosition",
+      "declaration": "cursorScreenPosition: Vec2;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "IInput.cursorLeftDown",
+      "declaration": "cursorLeftDown: Boolean;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer: bounded live snapshots and validated write-back; supported decoded renderer layer types only."
+    },
+    {
+      "api": "global.input",
+      "declaration": "declare let input: IInput;",
+      "kind": "global",
+      "status": "implemented",
+      "detail": "Compartment-owned API facade; Worker snapshots/commands only, no ambient native/DOM/network capabilities."
+    },
+    {
+      "api": "ILocalStorage",
+      "declaration": "interface ILocalStorage",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Storage/shared: typed memory-only storage, 100 KiB / 256 keys, global/screen namespaces. No persistent or cross-display synchronization; capability diagnostic states session scope."
+    },
+    {
+      "api": "ILocalStorage.LOCATION_GLOBAL",
+      "declaration": "static readonly LOCATION_GLOBAL: String = 'global';",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Storage/shared: typed memory-only storage, 100 KiB / 256 keys, global/screen namespaces. No persistent or cross-display synchronization; capability diagnostic states session scope."
+    },
+    {
+      "api": "ILocalStorage.LOCATION_SCREEN",
+      "declaration": "static readonly LOCATION_SCREEN: String = 'screen';",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Storage/shared: typed memory-only storage, 100 KiB / 256 keys, global/screen namespaces. No persistent or cross-display synchronization; capability diagnostic states session scope."
+    },
+    {
+      "api": "ILocalStorage.set",
+      "declaration": "set(key: String, value: Any, location?: String): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Storage/shared: typed memory-only storage, 100 KiB / 256 keys, global/screen namespaces. No persistent or cross-display synchronization; capability diagnostic states session scope."
+    },
+    {
+      "api": "ILocalStorage.get",
+      "declaration": "get(key: String, location?: String): Any;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Storage/shared: typed memory-only storage, 100 KiB / 256 keys, global/screen namespaces. No persistent or cross-display synchronization; capability diagnostic states session scope."
+    },
+    {
+      "api": "ILocalStorage.delete",
+      "declaration": "delete(key: String, location?: String): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Storage/shared: typed memory-only storage, 100 KiB / 256 keys, global/screen namespaces. No persistent or cross-display synchronization; capability diagnostic states session scope."
+    },
+    {
+      "api": "ILocalStorage.clear",
+      "declaration": "clear(location?: String): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Storage/shared: typed memory-only storage, 100 KiB / 256 keys, global/screen namespaces. No persistent or cross-display synchronization; capability diagnostic states session scope."
+    },
+    {
+      "api": "global.localStorage",
+      "declaration": "declare let localStorage: ILocalStorage;",
+      "kind": "global",
+      "status": "implemented",
+      "detail": "Storage/shared: typed memory-only storage, 100 KiB / 256 keys, global/screen namespaces. No persistent or cross-display synchronization; capability diagnostic states session scope."
+    },
+    {
+      "api": "IEngine",
+      "declaration": "interface IEngine",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.isRunningInEditor",
+      "declaration": "isRunningInEditor(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.isPortrait",
+      "declaration": "isPortrait(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.isLandscape",
+      "declaration": "isLandscape(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.isDesktopDevice",
+      "declaration": "isDesktopDevice(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.isMobileDevice",
+      "declaration": "isMobileDevice(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.isWallpaper",
+      "declaration": "isWallpaper(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.isScreensaver",
+      "declaration": "isScreensaver(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.AUDIO_RESOLUTION_16",
+      "declaration": "readonly AUDIO_RESOLUTION_16: Number = 16;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.AUDIO_RESOLUTION_32",
+      "declaration": "readonly AUDIO_RESOLUTION_32: Number = 32;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.AUDIO_RESOLUTION_64",
+      "declaration": "readonly AUDIO_RESOLUTION_64: Number = 64;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.registerAudioBuffers",
+      "declaration": "registerAudioBuffers(resolution: Number): AudioBuffers;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Bounded, stable Float32Array channels at 16/32/64 samples update from Luma’s active audio source: optional live system capture, wallpaper audio, deterministic fallback, or silence when audio is disabled. The bridge does not invent song metadata."
+    },
+    {
+      "api": "IEngine.registerAsset",
+      "declaration": "registerAsset(file: String, precache: Boolean): IAssetHandle;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Pure/command: validated normalized project-relative path handle; lazy renderer loading, precache request is not implemented and diagnosed."
+    },
+    {
+      "api": "IEngine.setTimeout",
+      "declaration": "setTimeout(callback: Function, delay?: Number): Function;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Command: Worker timers, cancel closure; 16/script, 32/scene; intervals ≥16ms; callbacks watched by host; cleared on script/scene destruction."
+    },
+    {
+      "api": "IEngine.setInterval",
+      "declaration": "setInterval(callback: Function, delay?: Number): Function;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Command: Worker timers, cancel closure; 16/script, 32/scene; intervals ≥16ms; callbacks watched by host; cleared on script/scene destruction."
+    },
+    {
+      "api": "IEngine.openUserShortcut",
+      "declaration": "openUserShortcut(userPropertyName: String): Boolean;",
+      "kind": "method",
+      "status": "unsupported",
+      "detail": "No native shortcut/process launcher exposed to wallpaper scripts. Explicit unavailable error."
+    },
+    {
+      "api": "IEngine.screenResolution",
+      "declaration": "screenResolution: Vec2;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.canvasSize",
+      "declaration": "canvasSize: Vec2;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.userProperties",
+      "declaration": "userProperties: Object;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.timeOfDay",
+      "declaration": "timeOfDay: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.frametime",
+      "declaration": "frametime: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "IEngine.runtime",
+      "declaration": "runtime: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Event: bounded engine snapshots refreshed per event/frame; clock fields advance, dimension Vec2 methods retained."
+    },
+    {
+      "api": "global.engine",
+      "declaration": "declare let engine: IEngine;",
+      "kind": "global",
+      "status": "implemented",
+      "detail": "Compartment-owned API facade; Worker snapshots/commands only, no ambient native/DOM/network capabilities."
+    },
+    {
+      "api": "IAnimation",
+      "declaration": "interface IAnimation",
+      "kind": "interface",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.fps",
+      "declaration": "readonly fps: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.frameCount",
+      "declaration": "readonly frameCount: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.duration",
+      "declaration": "readonly duration: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.name",
+      "declaration": "readonly name: String;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.rate",
+      "declaration": "rate: Number;",
+      "kind": "property",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.play",
+      "declaration": "play(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.pause",
+      "declaration": "pause(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.stop",
+      "declaration": "stop(): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.isPlaying",
+      "declaration": "isPlaying(): Boolean;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.getFrame",
+      "declaration": "getFrame(): Number;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "IAnimation.setFrame",
+      "declaration": "setFrame(frame: Number): void;",
+      "kind": "method",
+      "status": "implemented",
+      "detail": "Layer/command: existing decoded controller state and bounded playback commands; missing animation or decoder reports unavailable."
+    },
+    {
+      "api": "global.shared",
+      "declaration": "declare let shared: Object;",
+      "kind": "global",
+      "status": "implemented",
+      "detail": "Storage/shared: Worker-owned shared data/functions; bounded serializable data only sent to host; helpers keep current clocks."
+    },
+    {
+      "api": "global.thisObject",
+      "declaration": "global.thisObject",
+      "kind": "website/standard",
+      "status": "implemented",
+      "detail": "Layer: current bound layer/effect facade; current effect visible routed correctly. Material-property object identity is not bridged; no material-animation claim.",
+      "websiteOnly": true
+    },
+    {
+      "api": "Shared",
+      "declaration": "Shared",
+      "kind": "website/standard",
+      "status": "implemented",
+      "detail": "Storage/shared: arbitrary Worker-owned values/helper functions; bounded serializable host snapshots. Website alias for shared.",
+      "websiteOnly": true
+    },
+    {
+      "api": "IThisPropertyObject",
+      "declaration": "IThisPropertyObject",
+      "kind": "website/standard",
+      "status": "implemented",
+      "detail": "Layer: website alias of current property object; bound-property getAnimation supported. Effect/material property animation identity is unavailable.",
+      "websiteOnly": true
+    },
+    {
+      "api": "IEffect.getAnimation",
+      "declaration": "IEffect.getAnimation",
+      "kind": "website/standard",
+      "status": "unsupported",
+      "detail": "Effect property animation controller identity is not transported; explicit unavailable error.",
+      "websiteOnly": true
+    },
+    {
+      "api": "IMaterial.getAnimation",
+      "declaration": "IMaterial.getAnimation",
+      "kind": "website/standard",
+      "status": "unsupported",
+      "detail": "Material constant animation controller identity is not transported; explicit unavailable error.",
+      "websiteOnly": true
+    },
+    {
+      "api": "IAnimationLayer.getAnimation",
+      "declaration": "IAnimationLayer.getAnimation",
+      "kind": "website/standard",
+      "status": "unsupported",
+      "detail": "Nested clip property animations are not transported; explicit unavailable error.",
+      "websiteOnly": true
+    },
+    {
+      "api": "global.Date",
+      "declaration": "global.Date",
+      "kind": "website/standard",
+      "status": "implemented",
+      "detail": "Pure: compartment Date uses host numeric wall-clock samples refreshed on each event, timer and frame; no ambient Date/native capabilities.",
+      "websiteOnly": true
+    },
+    {
+      "api": "global.Date.now",
+      "declaration": "global.Date.now",
+      "kind": "website/standard",
+      "status": "implemented",
+      "detail": "Pure: current numeric wall-clock event sample, synchronized with Date construction.",
+      "websiteOnly": true
+    },
+    {
+      "api": "global.Math.random",
+      "declaration": "global.Math.random",
+      "kind": "website/standard",
+      "status": "implemented",
+      "detail": "Pure: private compartment pseudorandom generator; no native capabilities.",
+      "websiteOnly": true
+    }
+  ]
+}

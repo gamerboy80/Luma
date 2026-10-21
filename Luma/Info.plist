@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Luma reads track information from the Music or Spotify app you select so approved wallpaper scripts can show the current song.</string>
 	<key>LSMultipleInstancesProhibited</key>
 	<true/>
 </dict>

@@ -186,6 +186,7 @@ struct LockScreenView:View {
 struct PreferencesView:View {
     let model:AppModel
     @ObservedObject var library:LibraryStore
+    @ObservedObject private var sceneMedia = SceneMediaProvider.shared
     @State private var loginEnabled=LaunchAtLoginBaseline.isRegistered
     @State private var loginServiceMessage:String?
     @State private var showingClearData = false
@@ -204,7 +205,15 @@ struct PreferencesView:View {
                 Toggle("Sync a still frame to the native desktop",isOn:pref(\.syncDesktopStill))
                 Text("Still-frame sync helps the menu bar match your wallpaper. Your previous desktop image is restored when you stop Luma, provided the selection still belongs to Luma.").font(.caption).foregroundStyle(.secondary)
             }
-            Section("Wallpaper Engine") {Button("Choose Shared Engine Assets…"){model.chooseAssets()};Text(model.desktop.assetsURL?.path ?? "Optional: select the assets folder from your own Wallpaper Engine installation for built-in textures, fonts, and shaders.").font(.caption).foregroundStyle(.secondary).textSelection(.enabled);Text("Scenes run through bundled WebWallGL. Layers, particles, effects, models and SceneScript are supported by that renderer; individual projects may use features it cannot reproduce. System-audio capture and Now Playing synchronization are not connected in this build.").font(.caption).foregroundStyle(.secondary)}
+            Section("Scene media information") {
+                Picker("Read track information from", selection: Binding(get: { sceneMedia.source }, set: { sceneMedia.setSource($0) })) {
+                    ForEach(SceneMediaProvider.Source.allCases) { source in Text(source.title).tag(source) }
+                }
+                Text(sceneMedia.status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                if sceneMedia.source != .off { Button("Retry Metadata Connection") { sceneMedia.retry() } }
+                Text("Off by default. Share the selected player's title, artist, album, playback state, duration, and position with running wallpaper scripts. macOS asks for Automation permission. Luma reads metadata only; other players, album artwork, lyrics, and system audio are unavailable.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Wallpaper Engine") {Button("Choose Shared Engine Assets…"){model.chooseAssets()};Text(model.desktop.assetsURL?.path ?? "Optional: select the assets folder from your own Wallpaper Engine installation for built-in textures, fonts, and shaders.").font(.caption).foregroundStyle(.secondary).textSelection(.enabled);Text("Scenes run through bundled WebWallGL. Layers, particles, effects, models and SceneScript are supported by that renderer; individual projects may use features it cannot reproduce. System-audio capture is not connected in this build.").font(.caption).foregroundStyle(.secondary)}
             Section("General") {
                 Toggle("Launch Luma at login",isOn:$loginEnabled).onChange(of:loginEnabled){_,value in
                     do {

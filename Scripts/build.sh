@@ -24,7 +24,9 @@ else
 cat > "$LUMA_BUILD_ROOT/Luma.entitlements" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict/></plist>
+<plist version="1.0"><dict>
+<key>com.apple.security.automation.apple-events</key><true/>
+</dict></plist>
 PLIST
 fi
 xcodebuild -project "$LUMA_PROJECT_ROOT/Luma.xcodeproj" -scheme Luma -configuration Release -destination 'platform=macOS' -derivedDataPath "$LUMA_BUILD_ROOT" \

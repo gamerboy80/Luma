@@ -11,6 +11,17 @@ import AVFoundation
         func rejects(_ body: () throws -> Void) throws {
             do { try body() } catch { assertions += 1; return }; throw LumaError("FAILED: unsafe input was accepted")
         }
+        let track = SceneMediaProvider.decode(["playing", "A \"title\"\nwith text", "Artist", "Album", "Album Artist", "12.5", "180", "3"])
+        try check(track.available && track.title == "A \"title\"\nwith text" && track.position == 12.5 && track.duration == 180, "track metadata preserves text and timeline")
+        try check(track.artist == "Artist" && track.albumArtist == "Album Artist" && track.trackIndex == 3, "all supplied track fields")
+        try check(SceneMediaProvider.decode([]) == .empty, "invalid metadata is empty")
+        let invalidTrack = SceneMediaProvider.decode(["unknown", "Title", "", "", "", "nan", "inf", "-7"])
+        try check(invalidTrack.position == 0 && invalidTrack.duration == 0 && invalidTrack.trackIndex == 0 && invalidTrack.state == "stopped", "metadata rejects nonfinite or negative values")
+        try check(JSONSerialization.isValidJSONObject(track.json), "track data is safe for the script snapshot")
+        var scriptError: NSDictionary?
+        let query = NSAppleScript(source: SceneMediaProvider.metadataScript(for: .music))
+        let queryCompiles = query?.compileAndReturnError(&scriptError) == true
+        try check(queryCompiles, "fixed Music metadata query compiles without executing automation: \(scriptError ?? [:])")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("LumaTests-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

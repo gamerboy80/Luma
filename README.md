@@ -48,7 +48,7 @@ Import a complete project folder containing `project.json` and `scene.pkg` or lo
 
 The native application is Swift; the scene runtime is bundled JavaScript/WebGL in WKWebView. This is broad scene compatibility, not a claim of complete fidelity with Wallpaper Engine. Some effects, scripts, video codecs, and models may differ or fail; Diagnostics shows renderer warnings. Application wallpapers cannot run on macOS. Local web projects cannot load arbitrary remote resources under the renderer's content policy. A standalone HTML import copies just that file; import a project folder to include its assets.
 
-System-audio capture, music/Now Playing integration, Workshop publishing, and cloud synchronization are not implemented. Audio spectrum input is explicitly silent rather than simulated. SceneScript is disabled by default for imported projects; enable it in the wallpaper details only for projects you trust.
+Settings → **Scene media information** can share track metadata from **Music** or **Spotify** with approved scene scripts. This is off by default, uses a fixed read-only Apple Events query once per second, and requires macOS Automation permission and the standard local build. It supplies title, artist, album, album artist, track number, playback state, duration, and position. Other players, artwork, lyrics, player control, and system-audio capture are unavailable. Audio spectrum input is explicitly silent rather than simulated. SceneScript is disabled by default for imported projects; enable it in the wallpaper details only for projects you trust. The [SceneScript compatibility notes](research/SCENESCRIPT_COMPATIBILITY.md) describe the bridge, supported API families, and remaining renderer limits.
 
 ## Scene editor
 

@@ -83,6 +83,7 @@ struct ClearDataPlan {
             desktop.assetsURL = url
         }
         lockOverlay = ExperimentalLockScreenOverlay(library: library, assets: { desktop.assetsURL })
+        SceneMediaProvider.shared.startSavedSource()
         steam.downloaded = { [weak self] folder, id in
             guard let self else { throw LumaError("Luma closed before the downloaded wallpaper could be imported.") }
             try await self.library.importURL(folder, workshopID: id)
@@ -122,6 +123,7 @@ struct ClearDataPlan {
             remove.append("The same three Luma bookmark values in the old Luma preferences file; other values in that file are preserved.")
         }
         remove.append("Luma's Steam Web API key and Workshop search state from memory.")
+        remove.append("Luma's saved Music/Spotify metadata source and track metadata held in memory. Metadata polling stops. macOS Automation grants are managed by macOS; revoke Luma there in System Settings → Privacy & Security → Automation if desired.")
 
         var restore = desktop.clearDataRestorePlan() + native.clearDataRestorePlan()
         if lockOverlay.enabled { restore.append("Stop Luma's experimental lock-screen windows and remove the private SkyLight space.") }
@@ -135,6 +137,7 @@ struct ClearDataPlan {
             throw LumaError("Wait for downloads, imports, or native wallpaper exports to finish before clearing Luma data.")
         }
         desktop.beginClearData()
+        SceneMediaProvider.shared.stop(clearPreference: true)
         do {
             try lockOverlay.stopForClearData()
             try native.restoreManagedChangesForClearData()
@@ -155,7 +158,7 @@ struct ClearDataPlan {
             throw error
         }
     }
-    func shutdown() { lockOverlay.shutdown(); desktop.shutdown(); steam.cancel(); native.cancel(); assetsAccess?.stopAccessingSecurityScopedResource() }
+    func shutdown() { SceneMediaProvider.shared.stop(); lockOverlay.shutdown(); desktop.shutdown(); steam.cancel(); native.cancel(); assetsAccess?.stopAccessingSecurityScopedResource() }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {

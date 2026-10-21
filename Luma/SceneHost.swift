@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import WebKit
 import UniformTypeIdentifiers
 
@@ -63,6 +64,7 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
     private let scriptApproval: String?
     private var mountStarted = false
     private var stopped = false
+    private var mediaSubscription: AnyCancellable?
     init(folder: URL, assets: URL?, wallpaper: Wallpaper, configuration: DisplayConfiguration, preferences: AppPreferences, resources: URL? = nil) {
         projectFolder = folder
         scriptApproval = wallpaper.kind == .scene && wallpaper.runsSceneScript ? wallpaper.scriptApprovalFingerprint : nil
@@ -76,6 +78,9 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
+        mediaSubscription = SceneMediaProvider.shared.$snapshot.sink { [weak self] snapshot in
+            Task { @MainActor in self?.updateMedia(snapshot) }
+        }
         webView.navigationDelegate = self
         config.userContentController.add(self, name: "luma")
         webView.setValue(false, forKey: "drawsBackground")
@@ -87,7 +92,7 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
         switch body["event"] {
         case "ready":
             guard !didBecomeReady else { return }
-            didBecomeReady = true; setPlaying(desiredPlaying); ready?()
+            didBecomeReady = true; setPlaying(desiredPlaying); updateMedia(SceneMediaProvider.shared.snapshot); ready?()
         case "error": failed?((body["message"] ?? "The scene renderer stopped.") + (lastResourceWarning.isEmpty ? "" : "\n" + lastResourceWarning))
         case "diagnostic": lastResourceWarning = body["message"] ?? ""; diagnostic?(lastResourceWarning)
         default: break
@@ -124,6 +129,10 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed?(error.localizedDescription) }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { failed?("The scene renderer exited. Retry this wallpaper to rebuild its graphics context.") }
     func setPlaying(_ playing: Bool) { desiredPlaying = playing; if didBecomeReady { webView.evaluateJavaScript("window.wallpaper?.\(playing ? "resume" : "pause")()", completionHandler: nil) } }
+    private func updateMedia(_ snapshot: SceneMediaProvider.TrackSnapshot) {
+        guard didBecomeReady, !stopped, options["scripts"] as? Bool == true else { return }
+        webView.evaluateJavaScript("window.lumaSetMedia(\(Safety.json(snapshot.json)));void 0", completionHandler: nil)
+    }
     func configure(_ config: DisplayConfiguration, preferences: AppPreferences) {
         options["fps"] = preferences.sceneFPS; options["volume"] = config.volume
         if didBecomeReady {
@@ -233,6 +242,7 @@ final class WallpaperScheme: NSObject, WKURLSchemeHandler {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        mediaSubscription = nil
         didBecomeReady = false
         webView.evaluateJavaScript("window.wallpaper?.destroy({releasePkgCache:true})", completionHandler: nil)
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "luma")
