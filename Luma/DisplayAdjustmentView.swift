@@ -64,8 +64,8 @@ struct DisplaysView: View {
                         ForEach(FitMode.allCases, id: \.self) { mode in Text(mode.title).tag(mode).disabled(mode == .center && !supportsCenter) }
                     }.pickerStyle(.segmented)
                     adjustmentSlider("Zoom", value: binding(\.scale), range: 0.1...4, format: "%.2f×")
-                    adjustmentSlider("Horizontal", value: binding(\.offsetX), range: -1...1, format: "%.2f")
-                    adjustmentSlider("Vertical", value: binding(\.offsetY), range: -1...1, format: "%.2f")
+                    adjustmentSlider("Horizontal", value: binding(\.offsetX), range: -2...2, format: "%.2f")
+                    adjustmentSlider("Vertical", value: binding(\.offsetY), range: -2...2, format: "%.2f")
                     HStack {
                         Toggle("Enabled", isOn: binding(\.enabled))
                         Toggle("Pause this display", isOn: binding(\.paused))
@@ -176,6 +176,7 @@ final class DisplayWallpaperPreviewView: NSView {
     var displayPixels = CGSize.zero
     var playing = true
     var preferences = AppPreferences()
+    private var kind: WallpaperKind?
     private var imageLayer: CALayer?
     private var sourcePixels: CGSize?
     private var player: AVQueuePlayer?
@@ -192,6 +193,7 @@ final class DisplayWallpaperPreviewView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func load(folder: URL, media: URL?, assets: URL?, wallpaper: Wallpaper, configuration: DisplayConfiguration, preferences: AppPreferences, report: @escaping (String) -> Void) {
         self.configuration = configuration; self.preferences = preferences
+        kind = wallpaper.kind
         report("Loading preview…")
         switch wallpaper.kind {
         case .image:
@@ -226,6 +228,9 @@ final class DisplayWallpaperPreviewView: NSView {
             }
             player.play()
         case .scene, .web:
+            if wallpaper.kind == .scene {
+                sourcePixels = WallpaperPlacement.sceneProjectionPixels(folder: folder, entry: wallpaper.entry)
+            }
             var previewPreferences = preferences; previewPreferences.retina = false; previewPreferences.sceneFPS = 24
             var muted = configuration; muted.volume = 0
             let scene = SceneHost(folder: folder, assets: assets, wallpaper: wallpaper, configuration: muted, preferences: previewPreferences)
@@ -240,11 +245,17 @@ final class DisplayWallpaperPreviewView: NSView {
         super.layout()
         let presentation = player?.currentItem?.presentationSize ?? .zero
         if WallpaperPlacement.valid(presentation) { sourcePixels = presentation }
-        let frame = WallpaperPlacement.frame(in: bounds, configuration: configuration, sourcePixels: sourcePixels, displayPixels: displayPixels)
+        let usesSourceGeometry = kind == .image || kind == .video || kind == .scene
+        let frame: CGRect
+        if usesSourceGeometry, let sourcePixels, WallpaperPlacement.valid(sourcePixels) {
+            frame = WallpaperPlacement.contentRect(in: bounds, sourcePixels: sourcePixels, displayPixels: displayPixels, configuration: configuration)
+        } else {
+            frame = WallpaperPlacement.frame(in: bounds, configuration: configuration, sourcePixels: sourcePixels, displayPixels: displayPixels)
+        }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         imageLayer?.frame = frame; videoLayer?.frame = frame; host?.webView.frame = frame
-        imageLayer?.contentsGravity = configuration.fit == .contain || configuration.fit == .center ? .resizeAspect : configuration.fit == .stretch ? .resize : .resizeAspectFill
-        videoLayer?.videoGravity = configuration.fit == .cover ? .resizeAspectFill : configuration.fit == .contain ? .resizeAspect : .resize
+        imageLayer?.contentsGravity = usesSourceGeometry && sourcePixels != nil ? .resize : configuration.fit == .contain || configuration.fit == .center ? .resizeAspect : configuration.fit == .stretch ? .resize : .resizeAspectFill
+        videoLayer?.videoGravity = usesSourceGeometry && sourcePixels != nil ? .resize : configuration.fit == .cover ? .resizeAspectFill : configuration.fit == .contain ? .resizeAspect : .resize
         let visible = !stopped && window?.isVisible == true && window?.occlusionState.contains(.visible) == true
         if let player {
             if playing && visible { let rate = Float(configuration.speed); if player.rate != rate { player.playImmediately(atRate: rate) } }

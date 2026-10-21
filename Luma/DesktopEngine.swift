@@ -57,12 +57,18 @@ extension NSScreen {
         var source = sourcePixelSize
         if WallpaperPlacement.valid(presentation) { source = presentation }
         if source == nil, let width = wallpaper.width, let height = wallpaper.height { source = CGSize(width: width, height: height) }
-        let frame = WallpaperPlacement.frame(in: bounds, configuration: configuration, sourcePixels: wallpaper.kind == .image || wallpaper.kind == .video ? source : nil, displayPixels: screen.wallpaperPixelSize)
+        let usesSourceGeometry = wallpaper.kind == .image || wallpaper.kind == .video || wallpaper.kind == .scene
+        let frame: CGRect
+        if usesSourceGeometry, let source, WallpaperPlacement.valid(source) {
+            frame = WallpaperPlacement.contentRect(in: bounds, sourcePixels: source, displayPixels: screen.wallpaperPixelSize, configuration: configuration)
+        } else {
+            frame = WallpaperPlacement.frame(in: bounds, configuration: configuration, sourcePixels: source, displayPixels: screen.wallpaperPixelSize)
+        }
         videoLayer?.frame = frame
         imageLayer?.frame = frame
-        imageLayer?.contentsGravity = configuration.fit == .contain || configuration.fit == .center ? .resizeAspect : (configuration.fit == .stretch ? .resize : .resizeAspectFill)
+        imageLayer?.contentsGravity = source == nil ? (configuration.fit == .contain || configuration.fit == .center ? .resizeAspect : (configuration.fit == .stretch ? .resize : .resizeAspectFill)) : .resize
         videoLayer?.contentsScale = preferences.retina ? screen.backingScaleFactor : 1
-        videoLayer?.videoGravity = configuration.fit == .cover ? .resizeAspectFill : (configuration.fit == .contain ? .resizeAspect : .resize)
+        videoLayer?.videoGravity = source == nil ? (configuration.fit == .cover ? .resizeAspectFill : (configuration.fit == .contain ? .resizeAspect : .resize)) : .resize
         scene?.webView.frame = frame
         player?.volume = Float(configuration.volume); player?.isMuted = configuration.volume == 0
         scene?.configure(configuration, preferences: preferences)
@@ -266,6 +272,9 @@ enum DesktopStillOwnership {
                 let layer = CALayer(); layer.frame = surface.view.bounds; layer.contents = image; layer.contentsGravity = configuration.fit == .contain ? .resizeAspect : (configuration.fit == .stretch ? .resize : .resizeAspectFill); surface.view.layer?.addSublayer(layer); surface.imageLayer = layer
                 Task { @MainActor in ready() }
             case .scene, .web:
+                if wallpaper.kind == .scene {
+                    surface.sourcePixelSize = WallpaperPlacement.sceneProjectionPixels(folder: library.folder(wallpaper), entry: wallpaper.entry)
+                }
                 let scene = SceneHost(folder: library.folder(wallpaper), assets: assetsURL, wallpaper: wallpaper, configuration: configuration, preferences: library.state.preferences)
                 surface.scene = scene; scene.ready = ready; scene.failed = failure
                 scene.diagnostic = { [weak self] warning in self?.log(warning) }

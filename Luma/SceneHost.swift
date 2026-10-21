@@ -367,6 +367,7 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
         var volume: Double
         var fit: String
     }
+    private let wallpaperKind: WallpaperKind
     private var rendererSettings: RendererSettings
     private var submittedRendererSettings: RendererSettings?
     private var lastResourceWarning = ""
@@ -380,13 +381,22 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
     private var lastDeliveredPointer: PointerPosition?
     private var pendingPointer: PointerPosition?
     private var pointerEvaluationInFlight = false
+    private static func rendererFit(_ fit: FitMode, kind: WallpaperKind) -> String {
+        // Scene Fill is performed by clipping a full, uncropped scene projection in the
+        // native display viewport. Asking WebWallGL to crop first makes the cropped edges
+        // impossible to recover by panning.
+        if kind == .scene && fit == .cover { return FitMode.contain.rendererValue }
+        return fit.rendererValue
+    }
     init(folder: URL, assets: URL?, wallpaper: Wallpaper, configuration: DisplayConfiguration, preferences: AppPreferences, resources: URL? = nil) {
         projectFolder = folder
-        rendererSettings = RendererSettings(fps: preferences.sceneFPS, volume: configuration.volume, fit: configuration.fit.rendererValue)
+        wallpaperKind = wallpaper.kind
+        let fit = Self.rendererFit(configuration.fit, kind: wallpaper.kind)
+        rendererSettings = RendererSettings(fps: preferences.sceneFPS, volume: configuration.volume, fit: fit)
         scriptApproval = wallpaper.kind == .scene && wallpaper.runsSceneScript ? wallpaper.scriptApprovalFingerprint : nil
         scheme = WallpaperScheme(project: folder, assets: assets, resources: resources)
         options = ["fps": preferences.sceneFPS, "renderDpr": preferences.retina ? 0 : 1, "volume": configuration.volume,
-                   "fit": configuration.fit.rendererValue, "scripts": wallpaper.kind == .scene ? false : wallpaper.runsSceneScript,
+                   "fit": fit, "scripts": wallpaper.kind == .scene ? false : wallpaper.runsSceneScript,
                    "properties": (try? JSONSerialization.jsonObject(with: Data(wallpaper.propertiesJSON.utf8))) as? [String: Any] ?? [:],
                    "mountTimeoutMs": 45000, "audio": NSNull(), "media": NSNull()]
         let config = WKWebViewConfiguration(); config.setURLSchemeHandler(scheme, forURLScheme: "luma")
@@ -473,8 +483,9 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
         webView.evaluateJavaScript("window.lumaSetMedia(\(Safety.json(snapshot.json)));void 0", completionHandler: nil)
     }
     func configure(_ config: DisplayConfiguration, preferences: AppPreferences) {
-        options["fps"] = preferences.sceneFPS; options["volume"] = config.volume; options["fit"] = config.fit.rendererValue
-        rendererSettings = RendererSettings(fps: preferences.sceneFPS, volume: config.volume, fit: config.fit.rendererValue)
+        let fit = Self.rendererFit(config.fit, kind: wallpaperKind)
+        options["fps"] = preferences.sceneFPS; options["volume"] = config.volume; options["fit"] = fit
+        rendererSettings = RendererSettings(fps: preferences.sceneFPS, volume: config.volume, fit: fit)
         applyRendererSettings()
     }
     private func applyRendererSettings() {
@@ -527,6 +538,8 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
             throw LumaError("Scene capture dimensions must be between 1 and 8192 pixels, with no more than 16 megapixels.")
         }
         let value = try await webView.callAsyncJavaScript("return await window.lumaCaptureBridge(time,width,height)", arguments: ["time":time,"width":width,"height":height], in: nil, contentWorld: .page)
+        try Task.checkCancellation()
+        guard !stopped else { throw LumaError("Scene capture stopped before its renderer response arrived.") }
         guard let serialized = value as? String,
               serialized.utf8.count <= Self.maxCaptureBase64Characters + 16_384,
               let resultData = serialized.data(using: .utf8),
@@ -536,25 +549,9 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
         }
         if result["snapshot"] as? Bool == true {
             do {
-                try Task.checkCancellation()
-                guard !stopped else { throw LumaError("Scene capture stopped before its native snapshot.") }
-                let bounds = webView.bounds
-                guard bounds.width > 0, bounds.height > 0 else { throw LumaError("The scene has no visible surface for a native capture.") }
-                let aspect = bounds.height / bounds.width
-                let snapshotWidth = min(CGFloat(width), 2048, sqrt(16_777_216 / aspect), 8192 / aspect)
-                guard snapshotWidth >= 1 else { throw LumaError("The scene surface has an unsupported aspect ratio for native capture.") }
-                let config = WKSnapshotConfiguration()
-                config.rect = bounds; config.snapshotWidth = NSNumber(value: Double(snapshotWidth)); config.afterScreenUpdates = true
-                let image = try await webView.takeSnapshot(configuration: config)
-                guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-                      let png = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:]) else {
-                    throw LumaError("WebKit could not encode the scene's native snapshot.")
-                }
-                _ = try await webView.callAsyncJavaScript("window.lumaFinishCapture();return true", arguments: [:], in: nil, contentWorld: .page)
-                try Task.checkCancellation()
-                guard !stopped else { throw LumaError("Scene capture stopped before its native snapshot completed.") }
+                let png = try await nativeSnapshot(width: width, height: height, removeCaptureCanvas: true)
                 diagnostic?("Canvas PNG encoding was unavailable; captured the renderer's exact frame through WebKit's native snapshot.")
-                return try Self.png(png, withPixelSize: CGSize(width: width, height: height))
+                return png
             } catch {
                 _ = try? await webView.callAsyncJavaScript("window.lumaFinishCapture();return true", arguments: [:], in: nil, contentWorld: .page)
                 throw LumaError("Native scene capture failed: \(error.localizedDescription) Canvas diagnostic: \((result["error"] as? String ?? "unavailable").prefix(600))")
@@ -565,12 +562,42 @@ private struct PreparedWallpaperResource: @unchecked Sendable {
               let comma = string.firstIndex(of: ",") else {
             let detail = result["error"] as? String
             let payload = result["data"] as? String
+            if let detail, !stopped, Self.rendererFrameWasDisposed(detail) {
+                diagnostic?("WebWallGL could not render the requested capture frame (scene disposed/context lost); captured WebKit's last composited scene frame instead. The captured image may be stale.")
+                return try await nativeSnapshot(width: width, height: height, removeCaptureCanvas: false)
+            }
             throw LumaError(detail.map { "The scene renderer could not capture this frame: \($0.prefix(1_500))" } ?? "The renderer returned an invalid scene capture payload (ok=\(String(describing: result["ok"])), data type=\(result["data"].map { String(reflecting: type(of: $0)) } ?? "missing"), prefix=\(payload.map { String($0.prefix(80)) } ?? "missing")).")
         }
         let base64 = string[string.index(after: comma)...]
         guard base64.utf8.count <= Self.maxCaptureBase64Characters else { throw LumaError("The scene capture exceeds Luma's 96 MiB image limit.") }
         guard let data = Data(base64Encoded: String(base64)), data.count <= Self.maxCapturePNGBytes else { throw LumaError("The renderer returned an invalid or oversized scene capture.") }
         return try Self.png(data, withPixelSize: CGSize(width: width, height: height))
+    }
+    private static func rendererFrameWasDisposed(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("scene disposed") || normalized.contains("context lost") || normalized.contains("上下文丢失")
+    }
+    private func nativeSnapshot(width: Int, height: Int, removeCaptureCanvas: Bool) async throws -> Data {
+        try Task.checkCancellation()
+        guard !stopped else { throw LumaError("Scene capture stopped before its native snapshot.") }
+        let bounds = webView.bounds
+        guard bounds.width > 0, bounds.height > 0 else { throw LumaError("The scene has no visible surface for a native capture.") }
+        let aspect = bounds.height / bounds.width
+        let snapshotWidth = min(CGFloat(width), 2048, sqrt(16_777_216 / aspect), 8192 / aspect)
+        guard snapshotWidth >= 1 else { throw LumaError("The scene surface has an unsupported aspect ratio for native capture.") }
+        let config = WKSnapshotConfiguration()
+        config.rect = bounds; config.snapshotWidth = NSNumber(value: Double(snapshotWidth)); config.afterScreenUpdates = true
+        let image = try await webView.takeSnapshot(configuration: config)
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let png = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:]) else {
+            throw LumaError("WebKit could not encode the scene's native snapshot.")
+        }
+        if removeCaptureCanvas {
+            _ = try await webView.callAsyncJavaScript("window.lumaFinishCapture();return true", arguments: [:], in: nil, contentWorld: .page)
+        }
+        try Task.checkCancellation()
+        guard !stopped else { throw LumaError("Scene capture stopped before its native snapshot completed.") }
+        return try Self.png(png, withPixelSize: CGSize(width: width, height: height))
     }
     private static func png(_ data: Data, withPixelSize size: CGSize) throws -> Data {
         guard data.count <= maxCapturePNGBytes else { throw LumaError("The scene capture exceeds Luma's 96 MiB image limit.") }

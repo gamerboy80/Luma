@@ -32,6 +32,24 @@ import AVFoundation
         try check(WallpaperPlacement.contentRect(in: landscape, sourcePixels: square, displayPixels: landscape.size, configuration: placement) == CGRect(x: 420, y: 0, width: 1080, height: 1080), "Fit preserves aspect ratio and centers letterboxing")
         placement.fit = .stretch
         try check(WallpaperPlacement.contentRect(in: landscape, sourcePixels: square, displayPixels: landscape.size, configuration: placement) == landscape, "Stretch fills the entire display")
+        placement.fit = .cover
+        let wideSource = CGSize(width: 2560, height: 1080)
+        let fillContent = WallpaperPlacement.contentRect(in: landscape, sourcePixels: wideSource, displayPixels: landscape.size, configuration: placement)
+        try check(fillContent == CGRect(x: -320, y: 0, width: 2560, height: 1080), "Fill keeps the uncropped source width outside the clipped display viewport")
+        placement.offsetX = 0.25
+        let pannedFill = WallpaperPlacement.contentRect(in: landscape, sourcePixels: wideSource, displayPixels: landscape.size, configuration: placement)
+        try check(pannedFill.origin.x == 160, "panning translates the uncropped Fill source so clipped text can move into view")
+        placement.offsetX = 0
+        let projectionFolder = FileManager.default.temporaryDirectory.appendingPathComponent("Luma-scene-projection-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectionFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: projectionFolder) }
+        let projectionJSON = try JSONSerialization.data(withJSONObject: ["general": ["orthogonalprojection": ["width": 1600, "height": 900]], "objects": []])
+        try projectionJSON.write(to: projectionFolder.appendingPathComponent("scene.json"))
+        try check(WallpaperPlacement.sceneProjectionPixels(folder: projectionFolder, entry: "scene.json") == CGSize(width: 1600, height: 900), "loose scene files supply their actual projection dimensions to display framing")
+        let projectionPackage = try SceneProjectPackage(entries: [.init(name: "scene.json", bytes: projectionJSON)]).encoded()
+        try projectionPackage.write(to: projectionFolder.appendingPathComponent("scene.pkg"))
+        try check(WallpaperPlacement.sceneProjectionPixels(folder: projectionFolder, entry: "scene.pkg") == CGSize(width: 1600, height: 900), "scene package projection extraction reads only its scene document")
+        try check(WallpaperPlacement.sceneProjectionPixels(folder: projectionFolder, entry: "missing.pkg") == CGSize(width: 1920, height: 1080), "invalid scene projection metadata uses WebWallGL's 16:9 default")
         placement.fit = .center
         let hd = CGSize(width: 960, height: 540)
         try check(WallpaperPlacement.frame(in: landscape, configuration: placement, sourcePixels: hd, displayPixels: landscape.size) == CGRect(x: 480, y: 270, width: 960, height: 540), "Center retains one source pixel per display backing pixel")
@@ -239,7 +257,7 @@ import AVFoundation
         for mode in FitMode.allCases {
             preview.configuration.fit = mode; preview.configuration.offsetX = 0.1; preview.configuration.offsetY = -0.1
             preview.layout()
-            let expected = WallpaperPlacement.frame(in: preview.bounds, configuration: preview.configuration, sourcePixels: CGSize(width: previewFrame.width, height: previewFrame.height), displayPixels: landscape.size)
+            let expected = WallpaperPlacement.contentRect(in: preview.bounds, sourcePixels: CGSize(width: previewFrame.width, height: previewFrame.height), displayPixels: landscape.size, configuration: preview.configuration)
             try check(preview.layer?.sublayers?.first?.frame == expected && preview.layer?.masksToBounds == true, "native adjustment preview applies shared \(mode.title) geometry and clips to the display frame")
         }
         preview.stop()
@@ -307,7 +325,7 @@ import AVFoundation
             let restoredDisplays = try JSONDecoder().decode(SavedLibrary.self, from: Data(contentsOf: pendingLibrary.root.appendingPathComponent("library.json")))
             try check(restoredDisplays.displays[screen.persistentID] == applied && restoredDisplays.displays["offline-display-fixture"] == otherSettings, "display placement and unrelated display settings survive persistence")
             let actualSource = waitingPlayer.currentItem?.presentationSize ?? .zero
-            let expectedCenter = WallpaperPlacement.frame(in: waiting.view.bounds, configuration: applied, sourcePixels: actualSource, displayPixels: screen.wallpaperPixelSize)
+            let expectedCenter = WallpaperPlacement.contentRect(in: waiting.view.bounds, sourcePixels: actualSource, displayPixels: screen.wallpaperPixelSize, configuration: applied)
             try check(waiting.videoLayer?.frame == expectedCenter, "native video Center placement uses the same geometry as its preview")
             let reconnectDraft = DisplayAdjustmentDraft(displayID: screen.persistentID, configuration: applied)
             let connectedScreens = pendingEngine.screens

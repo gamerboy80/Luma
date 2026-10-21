@@ -82,10 +82,73 @@ enum WallpaperPlacement {
     }
     static func draggedOffsets(start: CGSize, translation: CGSize, previewSize: CGSize) -> CGSize {
         guard valid(previewSize), translation.width.isFinite, translation.height.isFinite else { return start }
-        return CGSize(width: min(1, max(-1, start.width + translation.width / previewSize.width)),
-                      height: min(1, max(-1, start.height - translation.height / previewSize.height)))
+        return CGSize(width: min(2, max(-2, start.width + translation.width / previewSize.width)),
+                      height: min(2, max(-2, start.height - translation.height / previewSize.height)))
     }
     static func valid(_ size: CGSize) -> Bool { size.width.isFinite && size.height.isFinite && size.width > 0 && size.height > 0 }
+
+    /// Reads the scene's declared orthogonal projection without decoding/copying the other
+    /// potentially large resources embedded in scene.pkg. A 16:9 projection is the renderer
+    /// default when a project omits the setting or contains an unsupported package.
+    static func sceneProjectionPixels(folder: URL, entry: String) -> CGSize {
+        let fallback = CGSize(width: 1920, height: 1080)
+        guard let url = try? Safety.child(entry, under: folder),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let fileSize = (attributes[.size] as? NSNumber)?.intValue,
+              fileSize > 0, fileSize <= 2 * 1024 * 1024 * 1024,
+              let bytes = try? Data(contentsOf: url, options: .mappedIfSafe) else { return fallback }
+
+        let sceneData: Data?
+        if url.pathExtension.lowercased() == "pkg" {
+            sceneData = sceneJSON(in: bytes)
+        } else if url.pathExtension.lowercased() == "json", bytes.count <= 16 * 1024 * 1024 {
+            sceneData = bytes
+        } else {
+            sceneData = nil
+        }
+        guard let sceneData,
+              let object = try? JSONSerialization.jsonObject(with: sceneData) as? [String: Any],
+              let general = object["general"] as? [String: Any],
+              let projection = general["orthogonalprojection"] as? [String: Any],
+              let width = (projection["width"] as? NSNumber)?.doubleValue,
+              let height = (projection["height"] as? NSNumber)?.doubleValue,
+              width.isFinite, height.isFinite, (1...65_535).contains(width), (1...65_535).contains(height) else { return fallback }
+        return CGSize(width: width, height: height)
+    }
+
+    private static func sceneJSON(in bytes: Data) -> Data? {
+        var cursor = 0
+        func read32() -> Int? {
+            guard cursor >= 0, cursor <= bytes.count - 4 else { return nil }
+            let value = UInt32(bytes[cursor]) | UInt32(bytes[cursor + 1]) << 8 | UInt32(bytes[cursor + 2]) << 16 | UInt32(bytes[cursor + 3]) << 24
+            cursor += 4
+            return Int(value)
+        }
+        func readName(_ length: Int) -> String? {
+            guard (1...4096).contains(length), cursor <= bytes.count - length,
+                  let value = String(data: bytes[cursor..<(cursor + length)], encoding: .utf8) else { return nil }
+            cursor += length
+            return value
+        }
+        guard let magicLength = read32(), let magic = readName(magicLength), magic.hasPrefix("PKGV"), magic.utf8.count == 8,
+              let count = read32(), (0...100_000).contains(count) else { return nil }
+        var exactCandidate: (offset: Int, size: Int)?
+        var nestedCandidate: (offset: Int, size: Int)?
+        for _ in 0..<count {
+            guard let nameLength = read32(), let name = readName(nameLength),
+                  (try? Safety.child(name, under: URL(fileURLWithPath: "/luma-scene-package"))) != nil,
+                  let offset = read32(), let size = read32() else { return nil }
+            if name.lowercased() == "scene.json" { exactCandidate = exactCandidate ?? (offset, size) }
+            else if name.lowercased().hasSuffix("/scene.json") { nestedCandidate = nestedCandidate ?? (offset, size) }
+        }
+        let candidate = exactCandidate ?? nestedCandidate
+        guard let candidate, candidate.size > 0, candidate.size <= 16 * 1024 * 1024,
+              cursor <= bytes.count, candidate.offset <= bytes.count - cursor,
+              candidate.size <= bytes.count - cursor - candidate.offset else { return nil }
+        let start = cursor + candidate.offset
+        return Data(bytes[start..<(start + candidate.size)])
+    }
 }
 
 struct DisplayAdjustmentDraft {

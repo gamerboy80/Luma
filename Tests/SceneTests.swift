@@ -181,6 +181,13 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
         do { _ = try await host.capture(time: 0.1, width: 320, height: 180); throw LumaError("The capture bridge accepted an empty data URL.") }
         catch let error as LumaError { guard error.message.contains("invalid PNG data URL") else { throw error } }
         _ = try await host.webView.callAsyncJavaScript("window.lumaCapture=window.__lumaCaptureForBridgeTest;delete window.__lumaCaptureForBridgeTest;return true", arguments: [:], in: nil, contentWorld: .page)
+        _ = try await host.webView.callAsyncJavaScript("window.__lumaDisposedCaptureOriginal=window.lumaCapture;window.lumaCapture=async()=>{throw new Error('scene disposed')};return true", arguments: [:], in: nil, contentWorld: .page)
+        let disposedFrame = try await host.capture(time: 0.2, width: 320, height: 180)
+        _ = try await host.webView.callAsyncJavaScript("window.lumaCapture=window.__lumaDisposedCaptureOriginal;delete window.__lumaDisposedCaptureOriginal;return true", arguments: [:], in: nil, contentWorld: .page)
+        guard let disposedBitmap = NSBitmapImageRep(data: disposedFrame), disposedBitmap.pixelsWide == 320, disposedBitmap.pixelsHigh == 180 else {
+            throw LumaError("WebKit's last-frame fallback did not recover the requested capture dimensions after the renderer disposed its frame.")
+        }
+        print("PASS: scene-disposed capture falls back to WebKit's last composited frame")
         let nativeFrame = try await captureWithoutCanvasPNG(host, disableDataURL: true)
         guard let nativeBitmap = NSBitmapImageRep(data: nativeFrame), nativeBitmap.pixelsWide == 320, nativeBitmap.pixelsHigh == 180 else {
             throw LumaError("The native snapshot fallback did not preserve the requested frame dimensions.")
@@ -245,6 +252,9 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
         let asset=AVURLAsset(url:movie);let duration=try await asset.load(.duration).seconds
         guard duration>0.8,try await asset.loadTracks(withMediaType:.video).count == 1 else {throw LumaError("Scene movie is incomplete")}
         host.stop(); window.close()
+        do { _ = try await host.capture(time: 0.2, width: 320, height: 180); throw LumaError("An explicitly stopped scene produced a stale capture.") }
+        catch let error as LumaError { guard error.message.contains("finish loading") else { throw error } }
+        print("PASS: explicit scene destruction does not use stale-frame capture fallback")
         try await verifyScripts(root: root, resources: resources, template: object)
     }
 
@@ -295,6 +305,7 @@ private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unch
         config.volume = 0.25; config.fit = .contain; preferences.sceneFPS = 24
         for _ in 0..<64 { host.configure(config, preferences: preferences) }
         config.volume = 0.5; host.configure(config, preferences: preferences)
+        config.fit = .stretch; host.configure(config, preferences: preferences)
         let calls = try await host.webView.callAsyncJavaScript("return Object.fromEntries(Object.entries(window.__lumaControlCalls).map(([key,value])=>[key,value.length]))", arguments: [:], in: nil, contentWorld: .page) as? [String: Int]
         guard calls == ["pause": 1, "resume": 1, "setFps": 1, "setVolume": 2, "setFit": 1] else {
             throw LumaError("Unchanged controls repeated renderer work or dropped transitions: \(String(describing: calls)).")
