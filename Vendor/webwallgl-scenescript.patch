@@ -1,3 +1,43 @@
+diff --git a/editor/limbs.ts b/editor/limbs.ts
+index 2ccdb54..5e144dc 100644
+--- a/editor/limbs.ts
++++ b/editor/limbs.ts
+@@ -467,7 +467,7 @@ export function autoLimbs(image: SheetImage, spec: SheetSpec, names: readonly st
+   keep.sort((a, b) => sizes[b] - sizes[a] || a - b);
+   const out: LimbMask[] = [];
+   for (const label of keep.slice(0, MAX_LIMBS)) {
+-    let mask = new Uint8Array(w * h);
++    let mask: Uint8Array<ArrayBufferLike> = new Uint8Array(w * h);
+     for (let i = 0; i < labels.length; i++) if (labels[i] === label) mask[i] = 1;
+     if (spec.smoothing > 0) mask = smoothMask(mask, w, h, spec.smoothing);
+     if (!maskCount(mask)) continue;
+@@ -515,7 +515,7 @@ export function recalculate(image: SheetImage, spec: SheetSpec, limbs: readonly
+     if (best >= 0) masks[best][i] = 1;
+   }
+   return limbs.map((l, k) => {
+-    let mask = masks[k];
++    let mask: Uint8Array<ArrayBufferLike> = masks[k];
+     if (spec.smoothing > 0) mask = smoothMask(mask, w, h, spec.smoothing);
+     return limbOf(l.id, l.name, mask, w, h);
+   });
+diff --git a/editor/vdir.ts b/editor/vdir.ts
+index d5ba049..c5b99e5 100644
+--- a/editor/vdir.ts
++++ b/editor/vdir.ts
+@@ -242,7 +242,12 @@ class VdirFileHandle implements FileHandle {
+       async write(data) {
+         // 立刻拷一份：真实 API 的 write 也不会被调用方后续改动影响
+         if (data instanceof Blob) chunks.push(data);
+-        else if (ArrayBuffer.isView(data)) chunks.push(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
++        else if (ArrayBuffer.isView(data)) {
++          const view = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
++          const copy = new Uint8Array(view.byteLength);
++          copy.set(view);
++          chunks.push(copy.buffer);
++        }
+         else chunks.push(new Uint8Array(data).slice());
+       },
+       async close() {
 diff --git a/package.json b/package.json
 index b5ccc4f..d59f556 100644
 --- a/package.json
@@ -167,11 +207,284 @@ index 349edca..721e4eb 100644
    /**
     * 亮度乘子（M4 A7）。引擎本来就消费它：parse.js 的 `parseNum(o.brightness, 1)`，
     * 渲染时逐通道 `color[i] * brightness * …`，且 `objectAnimations` 白名单里含
+diff --git a/renderer/src/main.ts b/renderer/src/main.ts
+index 1d0bba1..bd8aa7a 100644
+--- a/renderer/src/main.ts
++++ b/renderer/src/main.ts
+@@ -15,6 +15,7 @@
+ //   api/            公共库接口（mount/createScene/Source，见 docs/LIBRARY-PLAN.md）
+ //   main.ts         本文件：壁纸页入口 —— 创建全屏 Runtime、query 解析、window.__wp
+ import {
++  cancelScheduledFrame,
+   markFrame,
+   clear,
+   fitObjectFit,
+@@ -315,10 +316,7 @@ window.__wp = {
+     }
+     for (const p of rt.videoPairs ?? []) p.pause();
+     rt.video?.pause();
+-    if (rt.raf !== undefined) {
+-      cancelAnimationFrame(rt.raf);
+-      rt.raf = undefined;
+-    }
++    cancelScheduledFrame(rt);
+   },
+   resume() {
+     rt.paused = false;
+diff --git a/renderer/src/media.ts b/renderer/src/media.ts
+index 0a9f3db..54ef495 100644
+--- a/renderer/src/media.ts
++++ b/renderer/src/media.ts
+@@ -9,17 +9,15 @@
+ // 12.5%~18.7% 单核里，绝大部分就是这份重绘。
+ //
+ // 三条纪律：
+-// 1. **不停 rAF 循环，只是不提交渲染**。窥视 lerp 收敛、GIF 换帧、画布尺寸变化、
+-//    宿主热改 fit 都挂在循环上；而且 frameStats 在 400ms 无帧后会把 running 判成
+-//    false，停循环会让宿主与测试台以为壁纸出事。收益也不在 rAF 回调上 —— 实测
+-//    60fps→10fps 就拿到约八成收益，成本在渲染提交。
++// 1. 静止时只检查输入是否变化，不提交 WebGL 渲染。节拍调度仍检查窥视收敛、GIF
++//    换帧、画布尺寸和 fit，并刷新 frameStats 使用的静止心跳。
+ // 2. **首帧必须提交**（renderedOnce）：渲染器要在首次 render 里建 program/FBO。
+ // 3. **静止位要如实上报**（rt.renderIdleAt → frameStats().idle）：静止期间没有帧提交，
+ //    没有这一位就分不清「静止待命」和「暂停/挂了」。
+ //
+ // capture 无需改动：本路径保留 preserveDrawingBuffer:true（实测它对 CPU 无影响，
+ // 见提交记录），画布在静止期间也不被 clear，所以 toDataURL 仍拿到最后一帧。
+-import { clear, effectiveDpr, fitObjectFit, FrameGate, markFrame, normalizeFit, occlPaused, occlusionCfgOf, reapplyVolume, reportDiag, syncCanvasSize, type Runtime } from "./shell";
++import { cancelScheduledFrame, clear, effectiveDpr, fitObjectFit, FrameGate, markFrame, normalizeFit, occlPaused, occlusionCfgOf, reapplyVolume, reportDiag, syncCanvasSize, type Runtime } from "./shell";
+ import { classifyDiag } from "./diag-level";
+ import { occlusionFpsCap } from "./occlusion";
+ import { createLoopingVideo } from "./video-loop";
+@@ -528,14 +526,24 @@ export function mountMedia(rt: Runtime, cfg: WallpaperConfig) {
+       let lastCanvasH = c.height;
+       // A/B 钩子：__noMediaIdle=true 关掉按需渲染跑基线（对照跑法见提交说明）
+       const mediaIdleOff = (globalThis as any).__noMediaIdle === true;
++      const scheduleRenderFrame = () => {
++        if (disposed || rt.paused || occlPaused(rt) || rt.raf !== undefined || rt.frameTimer !== undefined) return;
++        const wait = frameGate.millisecondsUntilNext(performance.now());
++        if (gateFps > 0 && gateFps < 60 && wait > 1) {
++          // Wake just before the deadline, then let rAF align the render with display refresh.
++          rt.frameTimer = window.setTimeout(() => {
++            rt.frameTimer = undefined;
++            if (!disposed && !rt.paused && !occlPaused(rt)) rt.raf = requestAnimationFrame(renderLoop);
++          }, Math.max(0, wait - 1));
++        } else {
++          rt.raf = requestAnimationFrame(renderLoop);
++        }
++      };
+       const renderLoop = (now: number) => {
+         if (disposed || rt.paused || occlPaused(rt)) return;
+-        // 静止心跳按 **rAF 节奏**刷新，不按出帧节奏：帧率门会把大部分 rAF 拦在
+-        // shouldRender 之外，只在放行的帧上刷新的话，心跳会随 sceneFps 上限一起变慢
+-        // ——sceneFps 调到 1~2 时心跳就超时，静止待命被误报成「没在跑」。
++        // 静止心跳按调度节奏刷新；最低 sceneFps 仍高于 frameStats 的 400ms idle 期限。
+         if (rt.renderIdleAt) rt.renderIdleAt = now;
+-        // 帧率上限：比目标更快的 rAF 不渲染只继续排队，降低 GPU 占用。
+-        // 热改 fps 同步进调度器（保留节拍相位，平滑收敛）。
++        // 帧率上限：先检查目标节拍，再提交渲染。热改 fps 保留节拍相位。
+         // 遮挡降帧（V5）：档位 fps 与宿主上限取 min，同 scene 路径。
+         const occlBand = rt.occlusion?.band;
+         const baseFps = rt.cfg.sceneFps || 60;
+@@ -573,8 +581,9 @@ export function mountMedia(rt: Runtime, cfg: WallpaperConfig) {
+           // 后会把 running 判成 false，停循环会让宿主/测试台以为壁纸出事。
+           // 收益本来也不在 rAF 回调上：实测 60fps→10fps 已拿到约八成，成本在渲染提交。
+           if (!mediaIdleOff && renderedOnce && !sizeChanged && !texAdvanced && !peekMoved && !fitChanged) {
+-            rt.renderIdleAt = now; // 进入静止待命：从这里起由循环开头逐 rAF 刷新心跳
+-            rt.raf = requestAnimationFrame(renderLoop);
++            rt.renderIdleAt = now; // 进入静止待命：后续调度只检查输入并刷新心跳
++            rt.raf = undefined;
++            scheduleRenderFrame();
+             return;
+           }
+           markFrame(rt, now);
+@@ -613,26 +622,25 @@ export function mountMedia(rt: Runtime, cfg: WallpaperConfig) {
+                 } catch { /* 订阅者抛错不打断渲染循环 */ }
+               }
+               if (disposed || rt.paused || occlPaused(rt)) return;
+-              rt.raf = requestAnimationFrame(renderLoop);
++              rt.raf = undefined;
++              scheduleRenderFrame();
+             })
+             .catch((e: Error) => fail(String(e.message || e).slice(0, 200)));
+         } else if (!rt.paused && !occlPaused(rt)) {
+-          rt.raf = requestAnimationFrame(renderLoop);
++          rt.raf = undefined;
++          scheduleRenderFrame();
+         }
+       };
+       const kickLoop = () => {
+         if (disposed || rt.paused || occlPaused(rt)) return;
+-        if (rt.raf !== undefined) return;
++        if (rt.raf !== undefined || rt.frameTimer !== undefined) return;
+         rt.raf = requestAnimationFrame(renderLoop);
+       };
+       pauseImpl = () => {
+         // 重入幂等（同 scene 路径）：遮挡暂停 → 用户 pause() 交织下第二次跑
+         // 会把 videoWasPlaying 覆写成 false，恢复时视频永远不再起播（评审 P0）。
+         if (pauseStarted) return;
+-        if (rt.raf !== undefined) {
+-          cancelAnimationFrame(rt.raf);
+-          rt.raf = undefined;
+-        }
++        cancelScheduledFrame(rt);
+         pauseStarted = performance.now();
+         const v = rt.video;
+         videoWasPlaying = !!(v && !v.paused && !v.ended);
+diff --git a/renderer/src/quality.ts b/renderer/src/quality.ts
+index 34ad810..e065212 100644
+--- a/renderer/src/quality.ts
++++ b/renderer/src/quality.ts
+@@ -219,7 +219,7 @@ export function createAdaptiveQuality(opts: { onDowngrade: (next: PostQuality, r
+   };
+ }
+ 
+-// ---- 帧率守门第二段：视频纹理上传倍率（后处理到底之后的唯一减压手段）----
++// ---- 帧率守门第二段：视频纹理上传倍率 ----
+ 
+ /**
+  * 视频纹理上传倍率阶梯。
+@@ -231,7 +231,8 @@ export function createAdaptiveQuality(opts: { onDowngrade: (next: PostQuality, r
+  * 页面进程，代价随像素数线性（3510729512 实测：上传 2570×1446 → 16fps；压到
+  * 1280×720 → 29fps；完全不传 → 满帧 30。同一页面同配置在 Chromium 直接满帧）。
+  * 这条路径**降后处理/粒子都救不回来** —— 实测 post 从 medium 一路降到 off，
+- * 帧率纹丝不动，白丢画质。
++ * 帧率纹丝不动，白丢画质。尺寸阶梯用尽后，若上传成本仍超预算，最后再单独限制
++ * 视频纹理更新频率；动画和脚本仍按场景帧率运行。
+  *
+  * 台阶取 0.5 / 0.35 / 0.25：上传代价随**像素数**线性，而像素数跟着画布走 ——
+  * 同样的 0.35，在 2570 宽的画布上是 899×506（够，回满帧），在 3024 宽的画布上
+@@ -262,11 +263,24 @@ export function nextVideoScale(cur: number): number | null {
+   return null;
+ }
+ 
+-/** 视频倍率下坡的判据：后处理已无坡可下，所以节奏比后处理那段更紧。 */
++/** 视频倍率下坡的判据: measured upload work can be the bottleneck even at target FPS. */
+ export const VIDEO_STRIKES = 2;
+ export const VIDEO_COOLDOWN_S = 5;
+ export const VIDEO_GRACE_S = 3;
+ 
++/** Minimum automatic video upload cadence after texture scaling reaches its limit. */
++export const VIDEO_UPLOAD_RATE_MIN = 8;
++
++/** Reduce video upload cadence gradually while the rest of the scene keeps rendering. */
++export function nextVideoUploadRate(current: number, cap: number): number | null {
++  const limit = Number(cap);
++  if (!Number.isFinite(limit) || limit <= VIDEO_UPLOAD_RATE_MIN) return null;
++  const from = Number.isFinite(current) && current > 0 ? Math.min(current, limit) : limit;
++  if (from <= VIDEO_UPLOAD_RATE_MIN) return null;
++  const next = Math.max(VIDEO_UPLOAD_RATE_MIN, Math.floor(from * 0.75));
++  return next < from ? next : null;
++}
++
+ /**
+  * 帧率守门第二段的独立状态机。与后处理那段分开的理由：
+  *  1. 只有渲染器**确实在逐帧传视频纹理**时宿主才该喂它（没视频的场景降它毫无意义）；
+@@ -281,28 +295,87 @@ export function createAdaptiveVideoScale(opts: {
+   let elapsed = 0;
+   return {
+     /** 每秒调用一次；current 为当前生效倍率（1 = 不额外压）。 */
+-    tick(fps: number, cap: number, dtS: number, current: number): number | null {
++    tick(
++      fps: number,
++      cap: number,
++      dtS: number,
++      current: number,
++      upload?: { costMs?: number; budgetMs?: number },
++    ): number | null {
+       elapsed += dtS;
+       if (elapsed < VIDEO_GRACE_S) return null;
+       if (cooldown > 0) {
+         cooldown -= dtS;
+         return null;
+       }
+-      if (!(cap > 0) || !(fps > 0)) {
++      const hasFrameRate = cap > 0 && fps > 0;
++      const belowFrameRateTarget = hasFrameRate && fps < cap * ADAPTIVE_FPS_RATIO;
++      const uploadCostMs = Number(upload?.costMs);
++      const uploadBudgetMs = Number(upload?.budgetMs);
++      const overUploadBudget = Number.isFinite(uploadCostMs) && uploadCostMs > 0 &&
++        Number.isFinite(uploadBudgetMs) && uploadBudgetMs > 0 && uploadCostMs >= uploadBudgetMs;
++      if (!belowFrameRateTarget && !overUploadBudget) {
+         strikes = 0;
+         return null;
+       }
+-      if (fps >= cap * ADAPTIVE_FPS_RATIO) {
++      strikes++;
++      if (strikes < VIDEO_STRIKES) return null;
++      strikes = 0;
++      const next = nextVideoScale(current);
++      if (next === null) return null;
++      cooldown = VIDEO_COOLDOWN_S;
++      const reason = overUploadBudget
++        ? `视频纹理上传耗时 ${uploadCostMs.toFixed(1)}ms ≥ 帧预算 ${uploadBudgetMs.toFixed(1)}ms`
++        : `连续 ${VIDEO_STRIKES} 秒 ${fps.toFixed(0)}fps < 上限 ${cap} 的 ${ADAPTIVE_FPS_RATIO * 100}%`;
++      opts.onStepDown(next, reason);
++      return next;
++    },
++  };
++}
++
++/**
++ * Final video-load fallback after the texture has reached its minimum useful size.
++ * It limits only video texture uploads; scene animation and scripts keep their normal cadence.
++ */
++export function createAdaptiveVideoUploadRate(opts: {
++  onStepDown: (next: number, reason: string) => void;
++}) {
++  let strikes = 0;
++  let cooldown = 0;
++  let elapsed = 0;
++  return {
++    tick(
++      fps: number,
++      cap: number,
++      dtS: number,
++      current: number,
++      upload?: { costMs?: number; budgetMs?: number },
++    ): number | null {
++      elapsed += dtS;
++      if (elapsed < VIDEO_GRACE_S) return null;
++      if (cooldown > 0) {
++        cooldown -= dtS;
++        return null;
++      }
++      const hasFrameRate = cap > 0 && fps > 0;
++      const belowFrameRateTarget = hasFrameRate && fps < cap * ADAPTIVE_FPS_RATIO;
++      const uploadCostMs = Number(upload?.costMs);
++      const uploadBudgetMs = Number(upload?.budgetMs);
++      const overUploadBudget = Number.isFinite(uploadCostMs) && uploadCostMs > 0 &&
++        Number.isFinite(uploadBudgetMs) && uploadBudgetMs > 0 && uploadCostMs >= uploadBudgetMs;
++      if (!belowFrameRateTarget && !overUploadBudget) {
+         strikes = 0;
+         return null;
+       }
+       strikes++;
+       if (strikes < VIDEO_STRIKES) return null;
+       strikes = 0;
+-      const next = nextVideoScale(current);
++      const next = nextVideoUploadRate(current, cap);
+       if (next === null) return null;
+       cooldown = VIDEO_COOLDOWN_S;
+-      const reason = `连续 ${VIDEO_STRIKES} 秒 ${fps.toFixed(0)}fps < 上限 ${cap} 的 ${ADAPTIVE_FPS_RATIO * 100}%（后处理已到底）`;
++      const reason = overUploadBudget
++        ? `视频纹理在最低清晰度下仍上传 ${uploadCostMs.toFixed(1)}ms ≥ 帧预算 ${uploadBudgetMs.toFixed(1)}ms`
++        : `视频纹理上传后连续 ${VIDEO_STRIKES} 秒 ${fps.toFixed(0)}fps < 上限 ${cap} 的 ${ADAPTIVE_FPS_RATIO * 100}%`;
+       opts.onStepDown(next, reason);
+       return next;
+     },
 diff --git a/renderer/src/scene-mount.ts b/renderer/src/scene-mount.ts
-index 7aa08cf..b31ea49 100644
+index 7aa08cf..6bcff08 100644
 --- a/renderer/src/scene-mount.ts
 +++ b/renderer/src/scene-mount.ts
-@@ -48,6 +48,7 @@ import type {
+@@ -1,5 +1,5 @@
+ // 场景壁纸：mountScene 装配全链路（parse → assets → rAF）。
+-import { clear, effectiveDpr, effectiveUserVolume, FrameGate, markFrame, normalizeFit, occlPaused, occlusionCfgOf, ownSceneDebugGlobals, readText, reapplyVolume, reportDiag, resourceScaleFor, resourceScaleForNormal, syncCanvasSize, tickOcclusion, type Runtime } from "./shell";
++import { cancelScheduledFrame, clear, effectiveDpr, effectiveUserVolume, FrameGate, markFrame, normalizeFit, occlPaused, occlusionCfgOf, ownSceneDebugGlobals, readText, reapplyVolume, reportDiag, resourceScaleFor, resourceScaleForNormal, syncCanvasSize, tickOcclusion, type Runtime } from "./shell";
+ import { classifyDiag } from "./diag-level";
+ import { occlusionFpsCap, roiWorldRects, type WorldRect } from "./occlusion";
+ import { estimateGpuBytes as estimateGpuBytesPure, footprintTarget, isSmallTexture, layerFootprintPx, looksOpaque as looksOpaquePure, pickMipLevel as pickMipLevelPure, resourcesOff, scaleFrames, targetLong, texResScale } from "./resource-scale";
+@@ -48,11 +48,13 @@ import type {
    Source,
  } from "./api/types";
  import { createLoopingVideo } from "./video-loop";
@@ -179,7 +492,13 @@ index 7aa08cf..b31ea49 100644
  import { SKIP_3D_MODELS, SKIP_COMPONENTS, SKIP_PARTICLES, SKIP_SCENE_EFFECTS, SKIP_TEXT, SYSTEM_FONT_FAMILIES, TEXT_EM_SCALE } from "./types";
  import type { WallpaperConfig } from "./types";
  import {
-@@ -128,6 +129,7 @@ const DEFAULT_MESH_LIGHT: {
+   applyAutoQuality,
+   createAdaptiveQuality,
++  createAdaptiveVideoUploadRate,
+   createAdaptiveVideoScale,
+   nextVideoScale,
+   normalizeVideoTexScale,
+@@ -128,6 +130,7 @@ const DEFAULT_MESH_LIGHT: {
    base: [number, number, number];
    add: [number, number, number];
  } = { dir: [-0.4, 0.5, 0.77], base: [0.68, 0.68, 0.68], add: [0.52, 0.52, 0.52] };
@@ -187,7 +506,7 @@ index 7aa08cf..b31ea49 100644
  
  /** 编辑器自己的资产命名空间：`editor/gltf.ts` 的导入产物都写在 models|materials/editor/ 下。 */
  function isEditorAssetPath(p: unknown): boolean {
-@@ -494,7 +496,9 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -494,7 +497,9 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
      }
    };
    let pendingWire: Record<string, { value: unknown }> | null = null;
@@ -197,7 +516,7 @@ index 7aa08cf..b31ea49 100644
    let pauseImpl: (() => void) | undefined;
    let resumeImpl: (() => void) | undefined;
    /** 遮挡暂停（V5）：与用户 pause 共用媒体停启，但不碰 rt.paused。装配期未就绪时静默。 */
-@@ -521,6 +525,11 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -521,6 +526,11 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
        if (applyLiveImpl) applyLiveImpl(props);
        else pendingWire = { ...(pendingWire || {}), ...props };
      },
@@ -209,7 +528,7 @@ index 7aa08cf..b31ea49 100644
      setQuality(q) {
        rt.cfg.quality = { ...normalizeQuality(rt.cfg.quality), ...(q ?? {}) };
        setQualityImpl?.(normalizeQuality(rt.cfg.quality));
-@@ -890,6 +899,23 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -890,6 +900,23 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
          hook(info);
        }
        const propSandboxes: any[] = [];
@@ -233,7 +552,7 @@ index 7aa08cf..b31ea49 100644
        // M12 / W8 单脚本沙箱热替换（EDITOR-COMPLETION-PLAN §2 B3）。
        //
        // 现状：改脚本只能整场景重挂（第③档）。热替换要同时满足两条硬约束：
-@@ -947,8 +973,18 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -947,8 +974,18 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
          if (typeof script === "string" && script) skippedScripts++;
          return null;
        };
@@ -254,7 +573,25 @@ index 7aa08cf..b31ea49 100644
        const scriptSlotHost: ScriptSlotHost = {
          register: (sb) => propSandboxes.push(sb),
          clearIssues: (layerId, target) => {
-@@ -4981,6 +5017,14 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -4220,7 +4257,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+           if (!model.puppet) continue;
+           const mdlEntry = await readAsset(model.puppet);
+           if (!mdlEntry) continue;
+-          const mdlObj = mdl.parseMDL(new Uint8Array(mdlEntry as ArrayBuffer));
++          const mdlObj = mdl.parseMDL(new Uint8Array(mdlEntry));
+           // [we-scene patch 2026-10-08] puppet 层此前**完全不读材质**，2D 场景里就一律
+           // keepZ=0（z 压平 + 不测深度）—— 编辑器导入的 3D 网格（puppet 形态）自遮挡因此
+           // 退化成三角形顺序。这里补上材质解析：只有材质**显式**写 depthtest:"enabled"
+@@ -4288,7 +4325,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         try {
+           const mdlEntry = await readAsset(layer.model);
+           if (!mdlEntry) continue;
+-          const mdlObj = mdl.parseMDL(new Uint8Array(mdlEntry as ArrayBuffer));
++          const mdlObj = mdl.parseMDL(new Uint8Array(mdlEntry));
+           // [we-scene patch 2026-10-03] `reflected: true` 的对象要**同时**画进
+           // `_rt_Reflection`（关于 y=0 平面的镜像），供地板/桌面这类材质按屏幕 UV 采样。
+           // 标在图层上，渲染侧的 renderReflectionPass 按它筛（fantasticcar 的
+@@ -4981,6 +5018,14 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
        // 纯逻辑（脚本沙箱求值 / 盒内排版 / 绘制）在 vendor we-scene render/text.js，
        // 可被 scripts/verify-text.mjs 在 node 里对全库脚本离线校验。
          const textWidgets: any[] = [];
@@ -269,7 +606,7 @@ index 7aa08cf..b31ea49 100644
          // M12 / B1：热删层时把文字挂件与跨层文本表摘掉，否则**已销毁的层还会被画**
          //（文字挂件循环只认 item.layer，不看 scene.layers 是否还包含它）。
          layerTeardownHooks.push((ids) => {
-@@ -5021,7 +5065,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5021,7 +5066,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
          });
        let textCanvas: HTMLCanvasElement | null = null;
        let textCtx: CanvasRenderingContext2D | null = null;
@@ -278,7 +615,7 @@ index 7aa08cf..b31ea49 100644
          const ortho = (scene as any).general?.orthogonalprojection;
          const projW = ortho?.width || c.width;
          const projH = ortho?.height || c.height;
-@@ -5033,6 +5077,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5033,6 +5078,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
          // 字体：pkg 内嵌 ttf/otf → FontFace（refs 计数，clear 归零释放）；systemfont_* → 系统字体栈
          const fontFamilies = new Map<string, string>(); // fontPath → CSS family
          const usedFontKeys: string[] = []; // 本次挂载引入的缓存键（cleanup 时 refs--）
@@ -286,7 +623,7 @@ index 7aa08cf..b31ea49 100644
          const fontPaths = new Set<string>();
          for (const l of scene.layers as any[]) if (l.isText && l.textFont) fontPaths.add(l.textFont);
          // 脚本可能在包内其它字体间切换（3396722575 有 18 个）。只预载层快照路径的话，
-@@ -5046,6 +5091,46 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5046,6 +5092,46 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
              if (typeof e.name === "string" && /^fonts\/.+\.(ttf|otf|woff2?)$/i.test(e.name)) fontPaths.add(e.name);
            }
          }
@@ -333,7 +670,7 @@ index 7aa08cf..b31ea49 100644
          for (const fp of fontPaths) {
            const key = `${cfg.src}|${fp}`;
            const cached = fontFaceCache.get(key);
-@@ -5100,6 +5185,43 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5100,6 +5186,43 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
              prevCleanup?.();
            };
          }
@@ -377,7 +714,7 @@ index 7aa08cf..b31ea49 100644
          // 共享离屏画布：同一时刻只画/传一个挂件，尺寸按需调整
          textCanvas = document.createElement("canvas");
          textCtx = textCanvas.getContext("2d");
-@@ -5122,6 +5244,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5122,6 +5245,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
                  // [we-scene patch] layer：text/pointsize/font 写穿到真图层
                  //（与对象字段脚本同源，见 text.js evalTextScript 写穿段）
                  layer,
@@ -388,7 +725,7 @@ index 7aa08cf..b31ea49 100644
                  text: layer.text ?? "",
                  font: layer.textFont || "",
                  pointsize: layer.textPointsize,
-@@ -5131,6 +5257,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5131,6 +5258,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
                  scale: layer.scale,
                  visible: layer.visible,
                  canvasSize: { width: projW, height: projH },
@@ -399,7 +736,7 @@ index 7aa08cf..b31ea49 100644
                  timeOfDay: timeOfDayValue,
                  userProperties: liveUserProps,
                  shared: textShared,
-@@ -5144,12 +5274,47 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5144,12 +5275,47 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
                  windowTitle: windowDriver.snapshot,
                  openUserShortcut: shortcuts.openUserShortcut,
                  getLayerText: (name: string) => textLayerText.get(name),
@@ -449,7 +786,7 @@ index 7aa08cf..b31ea49 100644
                  onError: (e: unknown, phase?: unknown) => {
                    noteScriptIssue(layer, "text", e, phase);
                    reportDiag(rt, cfg, `text script '${layer.name}' 失败: ${String((e as Error).message || e).slice(0, 120)}`, "warn");
-@@ -5190,36 +5355,6 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5190,36 +5356,6 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
              }
              // 静态文本预置进跨层表（脚本层每帧更新自己的条目）
              textLayerText.set(layer.name || "", String(layer.text ?? ""));
@@ -486,7 +823,7 @@ index 7aa08cf..b31ea49 100644
              // 盒子（size）只是定位框，WE 不裁剪溢出文字（halign right 时整行向左长出）。
              // 画布/图层 quad 按盒子四周扩 M，内部盒子位置不变：文字溢出画进边距里。
              // 边距按字号估，不能按层的长边。4708×420 的圆环文字被扩成 6756×2468 后，
-@@ -5246,6 +5381,8 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5246,6 +5382,8 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
              let margin = baseMargin;
              item.boxW = layer.size[0] > 0 ? layer.size[0] : em0 * 4;
              item.boxH = layer.size[1] > 0 ? layer.size[1] : em0 * 1.6;
@@ -495,7 +832,7 @@ index 7aa08cf..b31ea49 100644
              // [we-scene patch] 静态文字层按墨水扩边（挂载期算一次，与逐帧的媒体文字层
              // 同一机制）：盒只是定位框，WE 不裁剪溢出文字，而我们的画布 = 盒 + 基础
              // 边距，超出的墨水被纹理边缘切掉。预设壁纸最容易撞上——用户值常比作者导出
-@@ -5315,6 +5452,153 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5315,6 +5453,153 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
              console.warn(`文字对象 ${layer.name} 初始化失败: ${(e as Error).message}`);
            }
          }
@@ -649,7 +986,7 @@ index 7aa08cf..b31ea49 100644
          // 场景卸载时释放文字纹理
          if (textWidgets.length > 0) {
            const prevCleanup = particleCleanup;
-@@ -5349,7 +5633,8 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5349,7 +5634,8 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
              // limitwidth/maxrows/limitrows 一并入 key 防同类潜伏。
              const pts = Math.max(1, it.sandbox ? it.sandbox.thisLayer.pointsize : layer.textPointsize);
              const fontPath = (it.sandbox && it.sandbox.thisLayer.font) || layer.textFont || "";
@@ -659,7 +996,7 @@ index 7aa08cf..b31ea49 100644
              if (it.lastKey === key) continue;
              it.lastKey = key;
              try {
-@@ -5592,6 +5877,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5592,6 +5878,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
          if (list) upsertRun(list, (s: any) => s === sandbox, sandbox);
          else cursorHooks.set(layer, [sandbox]);
        };
@@ -667,7 +1004,7 @@ index 7aa08cf..b31ea49 100644
        // 文字层的 cursor* 回调（3786330502 的悬停交互挂在文字层上）
        for (const it of textWidgets) {
          if (it.sandbox) addCursorHook(it.layer, it.sandbox);
-@@ -5614,7 +5900,9 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5614,7 +5901,9 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
          };
          let nextLayerId =
            1 + Math.max(0, ...(scene.layers as any[]).map((l: any) => Number(l.id) || 0));
@@ -678,7 +1015,7 @@ index 7aa08cf..b31ea49 100644
            recomputeVisibility,
            // 帧内合并通道（见 markVisibilityDirty 的注释）：沙箱的 `visible` setter
            // 优先用它，只有阶段外才落到上面的立即重算
-@@ -5629,6 +5917,140 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5629,6 +5918,140 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
            getSceneLayerById: (id: unknown) =>
              (scene.layers as any[]).find((l) => l.id === id && !l.destroyed) || null,
            enumerateSceneLayers: () => (scene.layers as any[]).filter((l) => !l.destroyed),
@@ -819,7 +1156,7 @@ index 7aa08cf..b31ea49 100644
            getParticleSystems: (target: { id?: number }) =>
              (target && target.id !== undefined && particleSystemsByLayer.get(target.id)) || [],
            emitParticles: (target: { id?: number }, count: number) => {
-@@ -5638,6 +6060,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5638,6 +6061,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
              for (const ps of list) made += ps.emitBurst(count) | 0;
              return made;
            },
@@ -827,7 +1164,7 @@ index 7aa08cf..b31ea49 100644
            getSceneAnimation: (name: string) => {
              if (name == null || name === "") return null;
              if (sceneNamedAnims[name]) return sceneNamedAnims[name];
-@@ -5655,15 +6078,19 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5655,15 +6079,19 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
                ? (renderer as any).getConstantAnimation(def)
                : null,
            getInitialLayerConfig: (arg: any) => {
@@ -850,7 +1187,7 @@ index 7aa08cf..b31ea49 100644
              if (typeof layerCfg === "string") {
                const imagePath = layerCfg;
                src =
-@@ -5710,6 +6137,19 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5710,6 +6138,19 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
                      alpha: 1,
                      brightness: 1,
                    };
@@ -870,7 +1207,7 @@ index 7aa08cf..b31ea49 100644
                  } else {
                    reportDiag(
                      rt,
-@@ -5722,19 +6162,72 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5722,19 +6163,72 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
                }
              }
              if (!src) src = {};
@@ -948,7 +1285,7 @@ index 7aa08cf..b31ea49 100644
                // 克隆条不要再跑模板层的 objectScripts（否则 64 根各自再造 64 根）
                objectScripts: null,
              };
-@@ -5750,6 +6243,8 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5750,6 +6244,8 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
                }));
              }
              scene.layers.push(clone);
@@ -957,7 +1294,7 @@ index 7aa08cf..b31ea49 100644
              // 运行期创建的层（金币/收集特效等）：不在 mount 期的 transformDirty 里，
              // 但脚本能随时改 origin。给粒子系统留标记，推进时按帧重读发射器变换，
              // 否则特效钉在构造点的 (0,0)（1712475860 的收集特效跑到左下角）。
-@@ -5813,6 +6308,22 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5813,6 +6309,22 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
                void buildParticleSystem(ppath, clone, null, 0).then((ps) => {
                  if (!ps) reportDiag(rt, cfg, `createLayer('${ppath}') 粒子系统装配失败`, "warn");
                });
@@ -980,7 +1317,7 @@ index 7aa08cf..b31ea49 100644
              }
              return clone;
            },
-@@ -5940,6 +6451,12 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5940,6 +6452,12 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
            if (!vs) return;
            try {
              const sandbox = evalObjectScript(vs.script, vs.scriptproperties, {
@@ -993,7 +1330,7 @@ index 7aa08cf..b31ea49 100644
                canvasSize: { width: objProjW, height: objProjH },
                timeOfDay: timeOfDayValue,
                userProperties: objUserProps,
-@@ -5991,6 +6508,12 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -5991,6 +6509,12 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
              if (!def) continue;
              try {
                const sandbox = evalObjectScript(def.script, def.scriptproperties, {
@@ -1006,7 +1343,7 @@ index 7aa08cf..b31ea49 100644
                  canvasSize: { width: objProjW, height: objProjH },
                  timeOfDay: timeOfDayValue,
                  userProperties: objUserProps,
-@@ -6069,6 +6592,21 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -6069,6 +6593,21 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
            for (const [key, def] of Object.entries(defs)) {
              try {
                const sandbox = evalObjectScript(def.script, def.scriptproperties, {
@@ -1028,7 +1365,7 @@ index 7aa08cf..b31ea49 100644
                  canvasSize: { width: objProjW, height: objProjH },
                  timeOfDay: timeOfDayValue,
                  userProperties: objUserProps,
-@@ -6111,6 +6649,14 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -6111,6 +6650,14 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
              try {
                // M12 / W8：env 收成工厂函数（热替换时按同一份 env 重新求值）。
                const makeEnv = () => ({
@@ -1043,7 +1380,7 @@ index 7aa08cf..b31ea49 100644
                  canvasSize: { width: objProjW, height: objProjH },
                  timeOfDay: timeOfDayValue,
                  userProperties: objUserProps,
-@@ -6172,8 +6718,37 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -6172,8 +6719,37 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
            if (!scripts) continue;
            for (const [field, def] of Object.entries(scripts)) {
              try {
@@ -1081,7 +1418,7 @@ index 7aa08cf..b31ea49 100644
                  canvasSize: { width: objProjW, height: objProjH },
                  screenResolution: { x: c.clientWidth || window.innerWidth || 1, y: c.clientHeight || window.innerHeight || 1 },
                  // 初值同 timeOfDayValue；帧循环每秒回填，昼夜脚本不再冻结。
-@@ -6338,6 +6913,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -6338,6 +6914,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
            for (const [field, def] of Object.entries(generalScripts)) {
              try {
                const sandbox = evalObjectScript(def.script, def.scriptproperties, {
@@ -1092,7 +1429,7 @@ index 7aa08cf..b31ea49 100644
                  canvasSize: { width: objProjW, height: objProjH },
                  timeOfDay: timeOfDayValue,
                  userProperties: objUserProps,
-@@ -6386,6 +6965,13 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -6386,6 +6966,13 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
            if (typeof tir === "string") d.layer.text = tir;
            d.sandbox.applyUserProperties(liveUserProps);
          }
@@ -1106,7 +1443,29 @@ index 7aa08cf..b31ea49 100644
          if (generalScriptRuns.length) {
            reportDiag(rt, cfg, `general scripts: ${generalScriptRuns.map((r) => r.field).join(",")}`, "info");
          }
-@@ -6670,6 +7256,9 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -6593,6 +7180,21 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+             },
+           })
+         : null;
++      let videoUploadFps = 0;
++      const applyVideoUploadFps = (fps: number) => {
++        const next = Number.isFinite(fps) && fps > 0 ? Math.min(240, fps) : 0;
++        if (Math.abs(next - videoUploadFps) < 0.1) return;
++        videoUploadFps = next;
++        renderer.setVideoUploadFps?.(next);
++      };
++      const adaptiveVideoUpload = autoRes.allowAdaptive
++        ? createAdaptiveVideoUploadRate({
++            onStepDown: (next, reason) => {
++              applyVideoUploadFps(next);
++              reportDiag(rt, cfg, `autoQuality: 视频纹理上传频率 → ${next}fps（${reason}）`, "warn");
++            },
++          })
++        : null;
+       let adaptiveAccum = 0;
+       let lastAdaptiveT = 0;
+       // 关键帧动画的上一帧时刻（真实时钟，秒）。**不能用固定的目标帧间隔累加**：
+@@ -6670,6 +7272,9 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
            frameGate.setFps(fps);
          }
          if (forced || frameGate.shouldRender(now)) {
@@ -1116,16 +1475,85 @@ index 7aa08cf..b31ea49 100644
            if (!forced) markFrame(rt, now);
            // 帧率守门挂起（V5，评估报告 R1）：遮挡降帧/暂停期间实测 fps 天然低于
            // 宿主上限，照常喂守门会误降后处理档位；且暂停时长会把 adaptiveAccum
-@@ -7425,7 +8014,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -6702,7 +7307,15 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+               const videoHeavy = !!(upNow && upNow.uploadsPerSec > 0 && upNow.costMs >= budgetMs);
+               const videoPinned = requestedVideoScale() > 0; // 显式指定 → 阶梯不碰
+               if (adaptiveVideo && !videoPinned && videoHeavy && !videoDone) {
+-                adaptiveVideo.tick(rt.frameMeter.fps, capNow, dtS, videoTexScale);
++                adaptiveVideo.tick(rt.frameMeter.fps, capNow, dtS, videoTexScale, {
++                  costMs: upNow?.costMs,
++                  budgetMs,
++                });
++              } else if (adaptiveVideoUpload && !videoPinned && videoHeavy && videoDone) {
++                adaptiveVideoUpload.tick(rt.frameMeter.fps, capNow, dtS, videoUploadFps || capNow, {
++                  costMs: upNow?.costMs,
++                  budgetMs,
++                });
+               } else {
+                 adaptive.tick(
+                   rt.frameMeter.fps,
+@@ -6712,9 +7325,17 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+                   postNow,
+                 );
+                 // 第二段：后处理已经没坡可下，且这个场景确实在逐帧传视频纹理 ——
+-                // 此时唯一的减压手段是压上传倍率（见 createAdaptiveVideoScale）。
++                // 先压纹理尺寸，尺寸阶梯用尽后再压上传频率，见对应两个状态机。
+                 if (adaptiveVideo && !videoPinned && postNow === "off" && !videoDone && upNow && upNow.uploadsPerSec > 0) {
+-                  adaptiveVideo.tick(rt.frameMeter.fps, capNow, dtS, videoTexScale);
++                  adaptiveVideo.tick(rt.frameMeter.fps, capNow, dtS, videoTexScale, {
++                    costMs: upNow.costMs,
++                    budgetMs,
++                  });
++                } else if (adaptiveVideoUpload && !videoPinned && postNow === "off" && videoDone && videoHeavy && upNow && upNow.uploadsPerSec > 0) {
++                  adaptiveVideoUpload.tick(rt.frameMeter.fps, capNow, dtS, videoUploadFps || capNow, {
++                    costMs: upNow.costMs,
++                    budgetMs,
++                  });
+                 }
+               }
+             }
+@@ -7411,7 +8032,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+                 if (rt.sceneTextUpdate) rt.sceneTextUpdate(t);
+               } catch (e) { /* 文字更新失败忽略 */ }
+               flushEditorWaiters();
+-              if (!forced) rt.raf = requestAnimationFrame(renderLoop);
++              if (!forced) {
++                rt.raf = undefined;
++                scheduleRenderFrame();
++              }
+             })
+             .catch((e: Error) => {
+               // [we-scene patch] 这条 catch 原先只 console.warn + diag + disposed：循环
+@@ -7425,9 +8049,12 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
                disposed = true;
                if (rt.onError) rt.onError(err);
                else rt.fallbackPage?.();
 -            });
 +            }).finally(() => scriptRuntime?.endFrame());
          } else {
-           if (!rt.paused && !occlPaused(rt)) rt.raf = requestAnimationFrame(renderLoop);
+-          if (!rt.paused && !occlPaused(rt)) rt.raf = requestAnimationFrame(renderLoop);
++          if (!rt.paused && !occlPaused(rt)) {
++            rt.raf = undefined;
++            scheduleRenderFrame();
++          }
          }
-@@ -7471,6 +8060,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+       };
+       // ---- 编辑器单帧通道（E0）----
+@@ -7455,10 +8082,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         }
+       };
+       /**
+-       * [we-scene patch issue #9] rAF 自递归的守卫壳。
++       * [we-scene patch issue #9] 帧调度回调的守卫壳。
+        *
+-       * 渲染循环的唯一续帧动作是函数体末尾的 `requestAnimationFrame(renderLoop)`。
+-       * 循环体里任一同步异常都会让那行永远执行不到 —— 循环**无声死亡**：既没有
++       * 渲染循环在帧完成后排入 rAF 或定时器。循环体里任一同步异常都会让续帧动作
++       * 永远执行不到 —— 循环**无声死亡**：既没有
+        * 下一帧，也没有任何诊断，调用方只看到 mount() 的 Promise 再也不落地
+        * （宿主无法区分「还在加载」和「已经死了」，只能自己加看门狗猜）。
+        *
+@@ -7471,6 +8098,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
          try {
            renderLoopImpl(now, forced);
          } catch (e) {
@@ -1133,7 +1561,43 @@ index 7aa08cf..b31ea49 100644
            const err = e instanceof Error ? e : new Error(String(e));
            failEditorWaiters(err);
            if (disposed) return;
-@@ -7810,6 +8400,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -7483,9 +8111,22 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+           else rt.fallbackPage?.();
+         }
+       };
++      const scheduleRenderFrame = () => {
++        if (disposed || rt.paused || occlPaused(rt) || rt.raf !== undefined || rt.frameTimer !== undefined) return;
++        const wait = frameGate.millisecondsUntilNext(performance.now());
++        if (gateFps > 0 && gateFps < 60 && wait > 1) {
++          // Capped playback needs one wake near the next frame deadline, not one callback per vsync.
++          rt.frameTimer = window.setTimeout(() => {
++            rt.frameTimer = undefined;
++            if (!disposed && !rt.paused && !occlPaused(rt)) rt.raf = requestAnimationFrame(renderLoop);
++          }, Math.max(0, wait - 1));
++        } else {
++          rt.raf = requestAnimationFrame(renderLoop);
++        }
++      };
+       const kickLoop = () => {
+         if (disposed || rt.paused || occlPaused(rt)) return;
+-        if (rt.raf !== undefined) return;
++        if (rt.raf !== undefined || rt.frameTimer !== undefined) return;
+         // 烘焙队列从这里（装配完成、马上要出第一帧）才开始消化：编码 PNG 的开销
+         // 只服务下一次加载，不许在本次加载期抢主线程（见 bake-cache 的 createBakeQueue）。
+         bakeQueue.arm();
+@@ -7622,10 +8263,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         // 首次调用已取消 rAF、已停媒体，kickLoop 又有 rt.paused/occlPaused 守卫，
+         // 早退不漏事。
+         if (pauseStarted) return;
+-        if (rt.raf !== undefined) {
+-          cancelAnimationFrame(rt.raf);
+-          rt.raf = undefined;
+-        }
++        cancelScheduledFrame(rt);
+         pauseStarted = performance.now();
+         playingVideos.length = 0;
+         for (const entry of textures.values()) {
+@@ -7810,6 +8448,10 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
          const a = Array.isArray(v) ? v : [];
          return [0, 1, 2].map((i) => (Number.isFinite(Number(a[i])) ? Number(a[i]) : d)) as [number, number, number];
        };
@@ -1144,7 +1608,7 @@ index 7aa08cf..b31ea49 100644
        // 该层及其整棵子树（父动子跟：重算 world 时必须一起进脏集合）
        const subtreeIds = (root: any): Set<unknown> => {
          const ids = new Set<unknown>([root.id]);
-@@ -7837,6 +8431,15 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -7837,6 +8479,15 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
            visible: l.visibleSelf !== false,
            alpha: Number.isFinite(Number(base.alpha)) ? Number(base.alpha) : 1,
            color: vec3(base.color, 1),
@@ -1160,7 +1624,7 @@ index 7aa08cf..b31ea49 100644
            // M4 A7：亮度乘子。引擎缺省 1（parse.js 的 parseNum(o.brightness, 1)）。
            brightness: Number.isFinite(Number(base.brightness)) ? Number(base.brightness) : 1,
          };
-@@ -7893,6 +8496,52 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+@@ -7893,6 +8544,52 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
            if (p.brightness !== undefined && Number.isFinite(p.brightness)) base.brightness = p.brightness;
            if (tinted) applyBuiltinMatTint(l);
          }
@@ -1213,12 +1677,40 @@ index 7aa08cf..b31ea49 100644
          return renderOnce();
        };
        // 动画层热改（W13）：与解析同一份 parseAnimationLayers 映射，整表替换。脚本 / 关键帧
+@@ -7989,11 +8686,17 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         animSeekPending = true;
+         for (const run of animRuns) run.held = false;
+         const pairs = rt.videoPairs ?? [];
+-        if (!pairs.length) return render ? renderOnce() : Promise.resolve();
++        if (!pairs.length) {
++          if (render) renderer.forceVideoUploadOnce?.();
++          return render ? renderOnce() : Promise.resolve();
++        }
+         // 视频贴图跟场景时钟对齐（场景 0 秒 = 视频 0 秒，超长按循环取模）；等帧解出来再画，
+         // 否则暂停时画出的是 seek 前的旧帧
+         const ready = Promise.all(pairs.map((p) => p.seek(t)));
+-        return render ? ready.then(() => renderOnce()) : ready.then(() => undefined);
++        return render ? ready.then(() => {
++          renderer.forceVideoUploadOnce?.();
++          return renderOnce();
++        }) : ready.then(() => undefined);
+       };
+       const captureFrameImpl = async (opts: {
+         time?: number;
+@@ -8017,6 +8720,7 @@ export function mountScene(rt: Runtime, cfg: WallpaperConfig) {
+         w = Math.max(1, Math.min(MAX, Math.round(w)));
+         h = Math.max(1, Math.min(MAX, Math.round(h)));
+         const resized = w !== baseW || h !== baseH;
++        renderer.forceVideoUploadOnce?.();
+         const shot = await new Promise<HTMLCanvasElement>((resolve, reject) => {
+           if (captureReq) captureReq.reject(new Error("capture superseded"));
+           captureReq = { w, h, armed: false, resolve, reject };
 diff --git a/renderer/src/scene-script-runtime.ts b/renderer/src/scene-script-runtime.ts
 new file mode 100644
-index 0000000..2e93af1
+index 0000000..fb744e8
 --- /dev/null
 +++ b/renderer/src/scene-script-runtime.ts
-@@ -0,0 +1,863 @@
+@@ -0,0 +1,941 @@
 +import SceneScriptWorker from "./scene-script-worker.ts?worker&inline";
 +
 +type ScriptKind = "text" | "object";
@@ -1261,6 +1753,70 @@ index 0000000..2e93af1
 +    if (next !== undefined) out[key] = next;
 +  }
 +  return out;
++}
++
++/** Estimate the structured-clone payload without JSON-stringifying every frame.
++ * Structured clone preserves repeated object references, so count each shared
++ * object once; this matters when one live audio/input snapshot is referenced by
++ * every script in an update batch. The estimate is bounded and conservative for
++ * this bridge's plain data-only messages.
++ */
++function bridgeMessageBytes(value: any): number {
++  const seen = new WeakSet<object>();
++  let bytes = 0;
++  let nodes = 0;
++  const add = (amount: number) => {
++    bytes = Math.min(MAX_MESSAGE_BYTES + 1, bytes + amount);
++  };
++  const stringBytes = (text: string): number => {
++    let count = 0;
++    for (let index = 0; index < text.length; index++) {
++      const unit = text.charCodeAt(index);
++      if (unit <= 0x7f) count += 1;
++      else if (unit <= 0x7ff) count += 2;
++      else if (unit >= 0xd800 && unit <= 0xdbff && index + 1 < text.length) {
++        const next = text.charCodeAt(index + 1);
++        if (next >= 0xdc00 && next <= 0xdfff) { count += 4; index++; }
++        else count += 3;
++      } else count += 3;
++      if (count > MAX_MESSAGE_BYTES) return MAX_MESSAGE_BYTES + 1;
++    }
++    return count;
++  };
++  const visit = (item: any, depth: number): void => {
++    if (++nodes > 100_000 || depth > 64) { add(MAX_MESSAGE_BYTES + 1); return; }
++    if (item == null || typeof item === "boolean" || typeof item === "number") { add(8); return; }
++    if (typeof item === "string") { add(8 + stringBytes(item)); return; }
++    if (typeof item !== "object") { add(16); return; }
++    if (seen.has(item)) { add(16); return; }
++    seen.add(item);
++    if (item instanceof ArrayBuffer) { add(32 + item.byteLength); return; }
++    if (ArrayBuffer.isView(item)) { add(32 + item.byteLength); return; }
++    if (Array.isArray(item)) {
++      add(24 + item.length * 4);
++      for (let index = 0; index < item.length && bytes <= MAX_MESSAGE_BYTES; index++) visit(item[index], depth + 1);
++      return;
++    }
++    let keys: string[];
++    try { keys = Object.keys(item); } catch { add(MAX_MESSAGE_BYTES + 1); return; }
++    add(32);
++    for (const key of keys) {
++      add(8 + stringBytes(key));
++      if (bytes > MAX_MESSAGE_BYTES) return;
++      try { visit(item[key], depth + 1); } catch { add(MAX_MESSAGE_BYTES + 1); return; }
++      if (bytes > MAX_MESSAGE_BYTES) return;
++    }
++  };
++  visit(value, 0);
++  return bytes;
++}
++
++function memoizedSnapshot<T>(cache: WeakMap<object, any>, source: any, create: () => T): T {
++  if (!source || typeof source !== "object") return create();
++  if (cache.has(source)) return cache.get(source);
++  const snapshot = create();
++  cache.set(source, snapshot);
++  return snapshot;
 +}
 +
 +function animationSnapshot(animation: any): any {
@@ -1498,44 +2054,47 @@ index 0000000..2e93af1
 +    }
 +  }
 +
-+  private snapshotContext(record: RecordEntry): any {
++  private snapshotContext(record: RecordEntry, cache = new WeakMap<object, any>(), wallClockTime = Date.now()): any {
 +    const opts = record.opts || {};
 +    const engine = record.facade.engine;
++    const canvasSize = engine.canvasSize || opts.canvasSize;
++    const screenResolution = engine.screenResolution || opts.screenResolution || { x: 1920, y: 1080 };
++    const sceneAnimations = opts.getSceneAnimations?.() || {};
++    const cameraTransforms = typeof opts.cameraTransforms === "function" ? opts.cameraTransforms() : opts.cameraTransforms || {};
++    const mediaSnapshot = opts.mediaControl?.snapshot || null;
 +    const context = {
 +      layerId: String(opts.layer?.id ?? ""),
 +      field: String(opts.sceneScriptField || ""),
 +      options: {
-+        canvasSize: safeValue(engine.canvasSize || opts.canvasSize),
-+        wallClockTime: Date.now(),
-+        screenResolution: safeValue(engine.screenResolution || opts.screenResolution || { x: 1920, y: 1080 }),
++        canvasSize: memoizedSnapshot(cache, canvasSize, () => safeValue(canvasSize)),
++        wallClockTime,
++        screenResolution: memoizedSnapshot(cache, screenResolution, () => safeValue(screenResolution)),
 +        timeOfDay: Number(engine.timeOfDay ?? opts.timeOfDay) || 0,
 +        frametime: Number(engine.frametime) > 0 ? Number(engine.frametime) : 1 / 60,
 +        runtime: Number(engine.runtime) || 0,
 +        isRunningInEditor: !!opts.isRunningInEditor,
 +        isScreensaver: !!opts.isScreensaver,
-+        workshopId: safeValue(opts.workshopId),
++        workshopId: memoizedSnapshot(cache, opts.workshopId, () => safeValue(opts.workshopId)),
 +        targetEffectIndex: Array.isArray(opts.layer?.effects) && opts.targetEffect ? opts.layer.effects.indexOf(opts.targetEffect) : -1,
 +      },
 +      engine: {
-+        canvasSize: safeValue(engine.canvasSize || opts.canvasSize),
++        canvasSize: memoizedSnapshot(cache, canvasSize, () => safeValue(canvasSize)),
 +        runtime: Number(engine.runtime) || 0,
 +        frametime: Number(engine.frametime) > 0 ? Number(engine.frametime) : 1 / 60,
 +        timeOfDay: Number(engine.timeOfDay ?? opts.timeOfDay) || 0,
-+        screenResolution: safeValue(engine.screenResolution || opts.screenResolution || { x: 1920, y: 1080 }),
++        screenResolution: memoizedSnapshot(cache, screenResolution, () => safeValue(screenResolution)),
 +      },
-+      sceneAnimations: Object.fromEntries(Object.entries(opts.getSceneAnimations?.() || {}).slice(0,128).map(([name,animation])=>[name,animationSnapshot(animation)])),
++      sceneAnimations: memoizedSnapshot(cache, sceneAnimations, () => Object.fromEntries(Object.entries(sceneAnimations).slice(0,128).map(([name,animation])=>[name,animationSnapshot(animation)]))),
 +      propertyAnimation: animationSnapshot(opts.getAnimationForProperty?.()),
-+      userProperties: safeValue(opts.userProperties || {}),
-+      shared: safeValue(opts.shared || {}),
-+      input: snapshotInput(opts.inputView),
-+      audio: audioSnapshot(opts.audioViews),
-+      general: safeValue(opts.general || {}),
-+      cameraTransforms: safeValue(typeof opts.cameraTransforms === "function" ? opts.cameraTransforms() : opts.cameraTransforms || {}),
-+      windowTitle: safeValue(opts.windowTitle || { title: "" }),
-+      mediaSnapshot: safeValue(opts.mediaControl?.snapshot || null),
++      userProperties: memoizedSnapshot(cache, opts.userProperties, () => safeValue(opts.userProperties || {})),
++      shared: memoizedSnapshot(cache, opts.shared, () => safeValue(opts.shared || {})),
++      input: memoizedSnapshot(cache, opts.inputView, () => snapshotInput(opts.inputView)),
++      audio: memoizedSnapshot(cache, opts.audioViews, () => audioSnapshot(opts.audioViews)),
++      general: memoizedSnapshot(cache, opts.general, () => safeValue(opts.general || {})),
++      cameraTransforms: memoizedSnapshot(cache, cameraTransforms, () => safeValue(cameraTransforms)),
++      windowTitle: memoizedSnapshot(cache, opts.windowTitle, () => safeValue(opts.windowTitle || { title: "" })),
++      mediaSnapshot: memoizedSnapshot(cache, mediaSnapshot, () => safeValue(mediaSnapshot)),
 +    };
-+    const serialized = JSON.stringify(context);
-+    if (new TextEncoder().encode(serialized).byteLength > MAX_MESSAGE_BYTES) throw new Error("SceneScript bridge snapshot exceeded 1 MB.");
 +    return context;
 +  }
 +
@@ -1558,7 +2117,6 @@ index 0000000..2e93af1
 +      } catch { /* missing particle state is diagnosed when a script requests it */ }
 +      return value;
 +    }).filter(Boolean);
-+    if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > MAX_MESSAGE_BYTES) throw new Error("Scene layer snapshot exceeded 1 MB.");
 +    return snapshot;
 +  }
 +
@@ -1587,9 +2145,14 @@ index 0000000..2e93af1
 +      const selected = Array.from({ length: count }, (_, index) => updates[(start + index) % updates.length]);
 +      this.updateCursor = (start + count) % updates.length;
 +      try {
++        // Reuse host-owned frame snapshots across scripts. The structured-clone
++        // algorithm preserves shared references, avoiding reserializing the same
++        // audio, pointer, settings and media data once for every script update.
++        const snapshotCache = new WeakMap<object, any>();
++        const frameTime = Date.now();
 +        const events = selected.filter(({ record }) => !record.destroyed).map(({ record, args, raw }) => ({
 +          id: record.id, args: safeValue(args), raw,
-+          context: this.snapshotContext(record),
++          context: this.snapshotContext(record, snapshotCache, frameTime),
 +        }));
 +        if (!events.length) { this.scheduleFlush(); return; }
 +        this.post({ type: "tick", generation: this.generation, sceneLayers: this.sceneSnapshot(), events }, "tick");
@@ -1606,7 +2169,7 @@ index 0000000..2e93af1
 +
 +  private post(message: any, type: "register" | "task" | "tick" | "dispose", id?: string, event?: string): void {
 +    if (!this.worker || this.disabled || this.disposed) return;
-+    const bytes = new TextEncoder().encode(JSON.stringify(message)).byteLength;
++    const bytes = bridgeMessageBytes(message);
 +    if (bytes > MAX_MESSAGE_BYTES) { this.fail("SceneScript bridge message exceeded 1 MB."); return; }
 +    this.busy = true;
 +    this.active = { type, id, event, startedAt: Date.now() };
@@ -1632,8 +2195,8 @@ index 0000000..2e93af1
 +  private receive(message: any): void {
 +    if (!message || message.generation !== this.generation || this.disposed || this.disabled) return;
 +    try {
-+      if (new TextEncoder().encode(JSON.stringify(message)).byteLength > MAX_MESSAGE_BYTES) { this.fail("SceneScript worker response exceeded 1 MB."); return; }
-+    } catch { this.fail("SceneScript worker response was not serializable."); return; }
++      if (bridgeMessageBytes(message) > MAX_MESSAGE_BYTES) { this.fail("SceneScript worker response exceeded 1 MB."); return; }
++    } catch { this.fail("SceneScript worker response could not be bounded safely."); return; }
 +    if (message.type === "begin") {
 +      if (this.active?.watchdog) clearTimeout(this.active.watchdog);
 +      this.busy = true;
@@ -1682,6 +2245,13 @@ index 0000000..2e93af1
 +      return;
 +    }
 +    if (message.type === "done") {
++      if (message.batch === "tick") {
++        const record = this.records.get(String(message.id));
++        if (record && this.active?.type === "tick") {
++          this.applyPatches(record, message.layers);
++          if (message.shared && record.opts.shared && typeof record.opts.shared === "object") this.mergeInto(record.opts.shared, message.shared);
++        }
++      }
 +      if (this.active?.watchdog) clearTimeout(this.active.watchdog);
 +      if (message.batch === "dispose") { this.terminate(); return; }
 +      this.active = null; this.busy = false; this.scheduleFlush();
@@ -2084,10 +2654,10 @@ index 0000000..2e93af1
 +}
 diff --git a/renderer/src/scene-script-worker.ts b/renderer/src/scene-script-worker.ts
 new file mode 100644
-index 0000000..79efd1d
+index 0000000..94fbb45
 --- /dev/null
 +++ b/renderer/src/scene-script-worker.ts
-@@ -0,0 +1,528 @@
+@@ -0,0 +1,560 @@
 +import "ses";
 +import * as wtext from "../vendor/we-scene/render/text.js";
 +
@@ -2143,6 +2713,35 @@ index 0000000..79efd1d
 +    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
 +    const item = cloneSafe(value[key], depth + 1, seen, budget);
 +    if (item !== undefined) out[key] = item;
++  }
++  return out;
++};
++
++// Shared helpers and live API handles stay in this Worker. Only own data values
++// cross to the host: reading a layer proxy's unsupported methods or a script
++// getter while serializing used to throw again from runEvent's error handler,
++// killing the entire Worker (including unrelated clock and media scripts).
++const snapshotShared = (value: any, depth = 0, seen = new WeakSet<object>(), budget = { nodes: 0 }): any => {
++  if (++budget.nodes > MAX_NODES || depth > 20) return undefined;
++  if (value == null || typeof value === "boolean") return value;
++  if (typeof value === "string") return value.slice(0, MAX_TEXT);
++  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
++  if (typeof value !== "object" || seen.has(value)) return undefined;
++  seen.add(value);
++  if (ArrayBuffer.isView(value)) return cloneSafe(value);
++  const array = Array.isArray(value);
++  const out: any = array ? [] : Object.create(null);
++  let keys: string[];
++  try { keys = Object.keys(value).slice(0, 4096); } catch { return undefined; }
++  for (const key of keys) {
++    if (["__proto__", "constructor", "prototype"].includes(key)) continue;
++    if (array && (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= 4096)) continue;
++    try {
++      const descriptor = Object.getOwnPropertyDescriptor(value, key);
++      if (!descriptor || !("value" in descriptor)) continue;
++      const item = snapshotShared(descriptor.value, depth + 1, seen, budget);
++      if (item !== undefined) out[key] = item;
++    } catch { /* A shared Proxy is not a serializable data provider. */ }
 +  }
 +  return out;
 +};
@@ -2463,13 +3062,13 @@ index 0000000..79efd1d
 +  if (!record.sandbox) throw new Error("SceneScript did not define a supported event.");
 +  record.invoke = (name: string, argsJson: string) => record.sandbox._sceneScriptInvoke(name, argsJson);
 +  record.invokeCallback = (callback: any) => record.sandbox._sceneScriptInvokeCallback(callback);
-+  record.readShared = () => cloneSafe(sceneShared);
++  record.readShared = () => snapshotShared(sceneShared);
 +  records.set(record.id, record);
 +  return record;
 +}
 +
-+function refreshRecord(record: WorkerRecord, context: any): void {
-+  updateLayers(context.sceneLayers || []);
++function refreshRecord(record: WorkerRecord, context: any, refreshLayers = true): void {
++  if (refreshLayers) updateLayers(context.sceneLayers || []);
 +  const target = sceneLayers.get(String(context.layerId)) || null;
 +  record.layer = target;
 +  record.opts.layer = target;
@@ -2546,8 +3145,8 @@ index 0000000..79efd1d
 +  record.commands = []; record.errors = [];
 +  try {
 +    const context = message.context || Object.create(null);
-+    refreshRecord(record, { ...context, sceneLayers: Array.isArray(message.sceneLayers) ? message.sceneLayers : context.sceneLayers || [] });
-+    const before = captureLayerState();
++    refreshRecord(record, { ...context, sceneLayers: Array.isArray(message.sceneLayers) ? message.sceneLayers : context.sceneLayers || [] }, !message.batch);
++    const before = message.batch ? null : captureLayerState();
 +    const beforeScene = sceneState(record);
 +    const sandbox = record.sandbox;
 +    const args = Array.isArray(message.args) ? message.args : [];
@@ -2570,10 +3169,10 @@ index 0000000..79efd1d
 +      case "update": result = message.raw ? sandbox.callUpdateRaw(args[0]) : sandbox.callUpdate(args[0]); break;
 +      default: throw new Error("Unsupported SceneScript event.");
 +    }
-+    const layers = collectLayerPatches(before);
-+    hostPostMessage({ type: "result", generation, id: record.id, event: message.event, result: cloneSafe(result), layers, sceneChanges: sceneChanges(record, beforeScene), shared: record.readShared(), commands: record.commands, errors: record.errors });
++    const layers = before ? collectLayerPatches(before) : [];
++    hostPostMessage({ type: "result", generation, id: record.id, event: message.event, result: cloneSafe(result), layers, sceneChanges: sceneChanges(record, beforeScene), shared: message.batch ? undefined : record.readShared(), commands: record.commands, errors: record.errors });
 +  } catch (error) {
-+    hostPostMessage({ type: "result", generation, id: record.id, event: message.event, error: String((error as Error)?.message || error).slice(0, 200), layers: [], shared: record.readShared(), commands: record.commands, errors: record.errors });
++    hostPostMessage({ type: "result", generation, id: record.id, event: message.event, error: String((error as Error)?.message || error).slice(0, 200), layers: [], shared: message.batch ? undefined : record.readShared(), commands: record.commands, errors: record.errors });
 +  }
 +}
 +
@@ -2597,6 +3196,9 @@ index 0000000..79efd1d
 +  else if (message.type === "tick") {
 +    if (generation !== message.generation || disabled || !Array.isArray(message.events)) return;
 +    updateLayers(message.sceneLayers || []);
++    // One bounded layer baseline and diff per frame, not per script. Reapplying
++    // the same host snapshot for every script also erased earlier sibling edits.
++    const before = captureLayerState();
 +    // Shared helper functions can close over an init-only script's engine.
 +    // Advance those clocks even when that script has no update hook of its own.
 +    const frame = message.events[0]?.context?.engine;
@@ -2604,8 +3206,8 @@ index 0000000..79efd1d
 +      for (const key of ["runtime", "frametime", "timeOfDay"]) if (Number.isFinite(frame[key])) record.sandbox.engine[key] = frame[key];
 +      record.sandbox._sceneScriptSetClock?.(hostNow());
 +    }
-+    for (const item of message.events.slice(0, 64)) runEvent({ ...item, generation, event: "update", sceneLayers: message.sceneLayers || [], context: item.context || Object.create(null) });
-+    hostPostMessage({ type: "done", generation, batch: "tick" });
++    for (const item of message.events.slice(0, 64)) runEvent({ ...item, generation, event: "update", batch: true, context: item.context || Object.create(null) });
++    hostPostMessage({ type: "done", generation, batch: "tick", id: message.events[0]?.id, layers: collectLayerPatches(before), shared: snapshotShared(sceneShared) });
 +  } else if (message.type === "dispose") {
 +    disabled = true;
 +    for (const timer of timers.values()) { hostClearTimeout(timer); hostClearInterval(timer as any); }
@@ -2617,10 +3219,19 @@ index 0000000..79efd1d
 +
 +export {};
 diff --git a/renderer/src/shell.ts b/renderer/src/shell.ts
-index 5e4a7e1..c83fb29 100644
+index 5e4a7e1..8be757f 100644
 --- a/renderer/src/shell.ts
 +++ b/renderer/src/shell.ts
-@@ -156,6 +156,7 @@ export type Runtime = {
+@@ -89,6 +89,8 @@ export type Runtime = {
+   canvas?: HTMLCanvasElement;
+   ctx?: CanvasRenderingContext2D;
+   raf?: number;
++  /** Timer used to wake shortly before a capped frame, avoiding discarded rAF callbacks. */
++  frameTimer?: number;
+   sceneCleanup?: () => void;
+   sceneAudio?: {
+     setVolume: (vol: number) => void;
+@@ -156,6 +158,7 @@ export type Runtime = {
      pause(): void;
      resume(): void;
      applyUserProperties(props: Record<string, { value: unknown }>): void;
@@ -2628,6 +3239,44 @@ index 5e4a7e1..c83fb29 100644
      /** 性能设置热更（抗锯齿/粒子/后处理档位，就地生效不重挂载） */
      setQuality?(q: QualityOptions): void;
      /** 视频纹理上传倍率热更（0=自动交给帧率守门，>0 固定；显式值优先于自动下坡） */
+@@ -491,8 +494,7 @@ export function clear(rt: Runtime) {
+       
+     }
+   }
+-  if (rt.raf !== undefined) cancelAnimationFrame(rt.raf);
+-  rt.raf = undefined;
++  cancelScheduledFrame(rt);
+   // 停掉场景视频纹理循环对（取消 rAF 交换驱动 + 暂停解码）
+   // （视频壁纸本身已是单 video + 原生 loop，无需在此处理）
+   for (const p of rt.videoPairs ?? []) p.destroy();
+@@ -894,6 +896,12 @@ export class FrameGate {
+     return true;
+   }
+ 
++  /** Time until the next eligible frame; callers can sleep instead of polling every rAF. */
++  millisecondsUntilNext(now: number): number {
++    if (this.interval <= 0 || !this.armed) return 0;
++    return Math.max(0, this.nextAt - now);
++  }
++
+   /** 暂停后恢复时调用：清空相位，恢复后首帧立即出、再重新铺节拍。 */
+   reset() {
+     this.armed = false;
+@@ -901,6 +909,14 @@ export class FrameGate {
+   }
+ }
+ 
++/** Cancel both halves of the capped-frame scheduler. */
++export function cancelScheduledFrame(rt: Runtime): void {
++  if (rt.raf !== undefined) cancelAnimationFrame(rt.raf);
++  rt.raf = undefined;
++  if (rt.frameTimer !== undefined) clearTimeout(rt.frameTimer);
++  rt.frameTimer = undefined;
++}
++
+ 
+ /** 渲染器诊断上报。**级别由上报方声明**（第 4 参，三档语义见 api/types.ts 的
+  *  DiagnosticLevel）：本仓库自己的调用点逐处给级别，纯文本判据只兜外部透传文案。
 diff --git a/renderer/vendor/we-scene/render/media.js b/renderer/vendor/we-scene/render/media.js
 index 8e0d2b0..18ed4a5 100644
 --- a/renderer/vendor/we-scene/render/media.js
@@ -2654,6 +3303,106 @@ index 56ec784..3f78414 100644
      else this._ov[key] = n
    }
  
+diff --git a/renderer/vendor/we-scene/render/renderer.js b/renderer/vendor/we-scene/render/renderer.js
+index 704d890..0b5dd16 100644
+--- a/renderer/vendor/we-scene/render/renderer.js
++++ b/renderer/vendor/we-scene/render/renderer.js
+@@ -844,6 +844,9 @@ export function createRenderer(canvas, opts = {}) {
+   gl.getExtension('EXT_color_buffer_float')
+   gl.getExtension('EXT_color_buffer_half_float')
+   gl.getExtension('OES_texture_float_linear')
++  // This hardware limit is constant for the lifetime of a WebGL context. Query
++  // it once instead of synchronously asking the GPU process on every video frame.
++  const videoHardwareMaxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 0
+   // [we-scene patch] GPU 资源登记表（docs/ENGINE-REVIEW-2026-10.md §3.1）：创建点登记、
+   // 正常释放路径销账、dispose 全量兜底。设计取舍与「为什么不 Proxy 包装 gl」见 gl-registry.js 头注。
+   const glReg = createGlRegistry(gl)
+@@ -919,6 +922,11 @@ export function createRenderer(canvas, opts = {}) {
+   //   ② 上传倍率（取舍，只降不升）：宿主帧率守门把后处理降到底后，从这里继续下坡。
+   //      `setVideoTexScale(0.5)` 即半幅上传 —— 全屏视频层唯一的减压手段。
+   let videoTexScale = 1
++  // Video uploads can dominate WebKit WebContent CPU even after the texture has been
++  // reduced to its minimum useful size. Keep scene rendering at its requested rate and
++  // independently bound how often decoded video frames are copied into GL textures.
++  let videoUploadFps = 0
++  let videoForceUploadFrame = -1
+   let videoUploadsPerSec = 0
+   /** 近 1 秒内的上传次数窗口（守门用它判断「这个场景到底在不在传视频」） */
+   let videoUploadCount = 0
+@@ -4617,7 +4625,11 @@ export function createRenderer(canvas, opts = {}) {
+     // 视频纹理层：把当前视频帧上传到 WebGL（帧时间戳变化才上传）
+     if (texObj && texObj.video) {
+       const v = texObj.video
+-      if (v.readyState >= 2 && v.currentTime !== texObj.lastUploaded) {
++      const uploadNow = typeof performance !== 'undefined' ? performance.now() : Date.now()
++      const forceUpload = videoForceUploadFrame === fboStamp
++      const uploadRateReady = videoUploadFps <= 0 || !Number.isFinite(texObj.lastUploadAt) ||
++        uploadNow - texObj.lastUploadAt >= 1000 / videoUploadFps
++      if (v.readyState >= 2 && v.currentTime !== texObj.lastUploaded && (forceUpload || uploadRateReady)) {
+         gl.bindTexture(gl.TEXTURE_2D, texObj.glTex)
+         try {
+           // [we-scene patch] 用离屏 canvas 中转视频帧（video 直传 WebGL 在 WKWebView 可能失败）
+@@ -4633,9 +4645,8 @@ export function createRenderer(canvas, opts = {}) {
+           // 甚至 3840），4K 源被降到 2048 再放大，观感明显发糊 —— 实测日志
+           // `video tex ready 2048x1152 (src 3840x2160)` 就是这个损失。
+           const targetMax = Math.max(width || 0, height || 0)
+-          const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 0
+           let limit = VIDEO_TEX_HARD_CAP
+-          if (maxTex > 0) limit = Math.min(limit, maxTex)
++          if (videoHardwareMaxTextureSize > 0) limit = Math.min(limit, videoHardwareMaxTextureSize)
+           if (targetMax > 0) limit = Math.min(limit, targetMax)
+           // 渲染目标异常小（首帧前 width/height 可能是 0/1）时别把纹理压成一条线
+           limit = Math.max(limit, VIDEO_TEX_MIN_CAP)
+@@ -4669,7 +4680,14 @@ export function createRenderer(canvas, opts = {}) {
+           // [we-scene patch 2026-09-26] 单次上传耗时（EMA）。WKWebView 下这里会包含
+           // 同步取像素的等待 —— 正是要找的那个数；诊断出口与守门判断都看它。
+           const uploadT0 = typeof performance !== 'undefined' ? performance.now() : 0
+-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src)
++          // Keep texture storage between frames. texImage2D reallocates that
++          // storage each time; texSubImage2D only replaces pixels. Reallocate
++          // when the capped video dimensions change (for example after resize).
++          if (texObj.uploadedWidth === uw && texObj.uploadedHeight === uh) {
++            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, src)
++          } else {
++            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src)
++          }
+           if (uploadT0 > 0) {
+             const cost = performance.now() - uploadT0
+             videoUploadCostMs = videoUploadCostMs > 0 ? videoUploadCostMs * 0.8 + cost * 0.2 : cost
+@@ -4719,7 +4737,10 @@ export function createRenderer(canvas, opts = {}) {
+           }
+           texObj.width = uw
+           texObj.height = uh
++          texObj.uploadedWidth = uw
++          texObj.uploadedHeight = uh
+           texObj.lastUploaded = v.currentTime
++          texObj.lastUploadAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+           // [we-scene patch] 上传尺寸变化时重报（limit 现在跟随渲染目标，改清晰度/
+           // 改窗口都会变）。只报一次会让诊断停留在首帧那个值，排错时误导。
+           // 判重记在各自纹理上：多路视频尺寸不同（如 640x338 / 640x360）时，共用一个
+@@ -5377,12 +5398,22 @@ export function createRenderer(canvas, opts = {}) {
+       const v = Number(s)
+       videoTexScale = Number.isFinite(v) && v > 0 && v <= 1 ? v : 1
+     },
++    /** Limit video texture copies without reducing scene animation or script updates. */
++    setVideoUploadFps: function (fps) {
++      const v = Number(fps)
++      videoUploadFps = Number.isFinite(v) && v > 0 ? Math.min(240, v) : 0
++    },
++    /** Force all video layers to refresh on the next rendered scene frame (seek/capture). */
++    forceVideoUploadOnce: function () {
++      videoForceUploadFrame = fboStamp + 1
++    },
+     /** [we-scene patch 2026-09-26] 诊断出口：视频纹理上传现状（守门据此跳过无视频的场景） */
+     videoUploadStats: function () {
+       return {
+         uploadsPerSec: videoUploadsPerSec,
+         costMs: Math.round(videoUploadCostMs * 10) / 10,
+         texScale: videoTexScale,
++        uploadFps: videoUploadFps,
+         tex: videoTexReportedSize,
+       }
+     },
 diff --git a/renderer/vendor/we-scene/render/scene-script-matrices.js b/renderer/vendor/we-scene/render/scene-script-matrices.js
 new file mode 100644
 index 0000000..720c1cb
@@ -4588,3 +5337,68 @@ index bde1151..a6bfa5f 100644
        visible: effVisible[i],
        // 自身可见性（未沿父链折叠）。热更用户属性时据此重算继承，避免把脚本改过的
        // 子层 visible 和「父组开关」揉成一份后无法局部刷新。
+diff --git a/scripts/verify-quality.mjs b/scripts/verify-quality.mjs
+index 9c5a8c6..9a8b276 100644
+--- a/scripts/verify-quality.mjs
++++ b/scripts/verify-quality.mjs
+@@ -115,6 +115,37 @@ const q = await loadQuality();
+   const m2 = q.createAdaptiveVideoScale({ onStepDown: () => { up++; } });
+   for (let i = 0; i < 20; i++) m2.tick(30, 30, 1, 1);
+   check(up === 0, "满帧时视频倍率不动（不无谓降画质）");
++
++  check(q.nextVideoUploadRate(30, 30) === 22, "视频纹理上传频率按当前上限渐进下降");
++  check(q.nextVideoUploadRate(22, 30) === 16, "视频纹理上传频率可以继续下降");
++  check(q.nextVideoUploadRate(8, 30) === null && q.nextVideoUploadRate(8, 8) === null,
++    "视频纹理上传频率受 8fps 下限和场景上限保护");
++
++  const rateSteps = [];
++  const rateGuard = q.createAdaptiveVideoUploadRate({ onStepDown: (n, reason) => rateSteps.push({ n, reason }) });
++  let rate = 30;
++  for (let i = 0; i < 4; i++) {
++    const got = rateGuard.tick(30, 30, 1, rate, { costMs: 12, budgetMs: 8.3 });
++    if (got !== null) rate = got;
++  }
++  check(rateSteps[0]?.n === 22 && rate === 22, "最低纹理倍率仍超预算时自动下调视频上传频率");
++  check(/最低清晰度/.test(rateSteps[0]?.reason ?? ""), "上传频率诊断说明最低纹理倍率已生效");
++
++  let rateStable = 0;
++  const rateGuard2 = q.createAdaptiveVideoUploadRate({ onStepDown: () => { rateStable++; } });
++  for (let i = 0; i < 20; i++) rateGuard2.tick(30, 30, 1, 30, { costMs: 2, budgetMs: 8.3 });
++  check(rateStable === 0, "上传成本在预算内时视频更新频率不下降");
++
++  const costSteps = [];
++  let costReason = "";
++  const m3 = q.createAdaptiveVideoScale({ onStepDown: (n, reason) => { costSteps.push(n); costReason = reason; } });
++  let costScale = 1;
++  for (let i = 0; i < 4; i++) {
++    const got = m3.tick(30, 30, 1, costScale, { costMs: 12, budgetMs: 8.3 });
++    if (got !== null) costScale = got;
++  }
++  check(costSteps[0] === q.VIDEO_SCALE_LADDER[0], "帧率达标但视频上传连续超预算时仍自动降纹理倍率");
++  check(/上传耗时/.test(costReason), "自动降视频倍率诊断包含上传耗时原因");
+ }
+ 
+ // ---------- 2) 接线断言 ----------
+@@ -138,6 +169,10 @@ const indexSrc = fs.readFileSync(join(ROOT, "editor/index.html"), "utf8");
+   check(/renderbufferStorageMultisample/.test(rendererSrc), "MSAA 走多重采样 renderbuffer");
+   check(/setVideoTexScale:\s*function/.test(rendererSrc) && /videoUploadStats:\s*function/.test(rendererSrc),
+     "renderer 返回对象有 setVideoTexScale / videoUploadStats（视频下坡的两个出口）");
++  check(/setVideoUploadFps:\s*function/.test(rendererSrc) && /uploadRateReady/.test(rendererSrc),
++    "renderer 可以限制视频纹理上传频率而不限制 scene render");
++  check(/forceVideoUploadOnce:\s*function/.test(rendererSrc) && /videoForceUploadFrame === fboStamp/.test(rendererSrc),
++    "renderer 的 seek/capture 可以强制刷新下一帧视频纹理");
+   check(/videoLayerFootprintPx/.test(rendererSrc), "视频纹理按图层足迹封顶（免费那半）");
+   check(/let videoDirectFailed = false/.test(rendererSrc) && /videoDirectFailed && videoCanvas/.test(rendererSrc),
+     "视频纹理**直传优先**（canvas 中转只在直传失败后启用）");
+@@ -208,6 +243,11 @@ const indexSrc = fs.readFileSync(join(ROOT, "editor/index.html"), "utf8");
+     "工作台改档位即时热更（setQuality，不重挂）");
+   check(/createAdaptiveVideoScale/.test(mountSrc) && /adaptiveVideo/.test(mountSrc),
+     "scene-mount 接了视频纹理倍率下坡（守门第二段）");
++  check(/createAdaptiveVideoUploadRate/.test(mountSrc) && /setVideoUploadFps/.test(rendererSrc) && /视频纹理上传频率/.test(mountSrc),
++    "最低纹理倍率仍超预算时 scene-mount 下调视频上传频率并报告诊断");
++  check(/forceVideoUploadOnce\?\.\(\)/.test(mountSrc), "seek 和 capture 强制上传目标视频帧");
++  check(/costMs: upNow\?\.costMs/.test(mountSrc) && /uploadBudgetMs/.test(fs.readFileSync(join(ROOT, "renderer/src/quality.ts"), "utf8")),
++    "scene-mount 将测得的视频上传耗时和帧预算送入自适应倍率守门");
+   check(/videoUploadStats\?\.\(\)/.test(mountSrc), "下坡前先确认这个场景确实在传视频");
+   check(/vidscale/.test(mainSrc), "库 main.ts 解析 ?vidscale（视频纹理倍率）");
+   check(/videoTexScale: o\.videoTexScale/.test(apiMountSrc), "resolveMountConfig 透传 videoTexScale");

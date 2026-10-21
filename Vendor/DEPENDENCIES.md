@@ -21,6 +21,8 @@ Particle state includes bounded live-system counts and up to eight decoded contr
 
 `shared` functions remain inside the Worker; only bounded serializable values cross the host bridge. `localStorage` is typed and limited to 100 KiB / 256 keys in scene memory, with no persistence after scene teardown. Browser Workers have no portable hard heap limit. Timers, source, snapshots, messages, structure, commands, storage, event queues, and per-frame work are capped; the host watchdog handles hangs.
 
+Update batches refresh and diff scene layers once per frame. Individual events retain their begin/result messages and watchdogs; the completed batch returns validated layer changes and shared data together. This avoids copying and comparing every layer separately for every script, and preserves changes made by earlier scripts in the same batch. Shared host snapshots never invoke API proxy getters.
+
 ## Rebuilding the renderer
 
 Run `Scripts/build-renderer.sh` with Node.js and pnpm available. It downloads the pinned upstream source into a temporary directory, installs the pinned lockfile with lifecycle scripts disabled, applies the checked-in compatibility patch, and generates the checked-in bundle. Native Swift builds use the existing bundle and require no network or Node installation.

@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-enum WallpaperKind: String, Codable, CaseIterable { case video, scene, web, image }
+enum WallpaperKind: String, Codable, CaseIterable, Sendable { case video, scene, web, image }
 enum FitMode: String, Codable, CaseIterable { case cover, contain, stretch }
 struct Wallpaper: Identifiable, Codable, Hashable {
     var id: UUID = UUID()

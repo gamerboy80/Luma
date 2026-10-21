@@ -30,6 +30,12 @@ import AVFoundation
         let invalidTrack = SceneMediaProvider.decode(["unknown", "Title", "", "", "", "nan", "inf", "-7"])
         try check(invalidTrack.position == 0 && invalidTrack.duration == 0 && invalidTrack.trackIndex == 0 && invalidTrack.state == "stopped", "metadata rejects nonfinite or negative values")
         try check(JSONSerialization.isValidJSONObject(track.json), "track data is safe for the script snapshot")
+        let response = try JSONSerialization.data(withJSONObject: ["playing", "A \"title\"\n曲", "Artist", "Album", "Album Artist", 12.5, 180, 3] as [Any])
+        let processTrack = try SceneMediaProvider.decodeResponse(response).get()
+        try check(processTrack.title == "A \"title\"\n曲" && processTrack.position == 12.5 && processTrack.trackIndex == 3, "process metadata safely decodes JSON text and numeric fields")
+        try rejects { _ = try SceneMediaProvider.decodeResponse(Data("not JSON".utf8)).get() }
+        try rejects { _ = try SceneMediaProvider.decodeResponse(Data("[\"playing\",{}]".utf8)).get() }
+        try rejects { _ = try SceneMediaProvider.decodeResponse(Data(repeating: 32, count: 65_537)).get() }
         let encoderSize = try TemporalEncoder.dimensions(for: CGSize(width: 128, height: 72))
         try check(encoderSize.width == 128 && encoderSize.height == 72, "encoder accepts ordinary video dimensions")
         try rejects { _ = try TemporalEncoder.dimensions(for: CGSize(width: CGFloat.infinity, height: 72)) }
@@ -50,11 +56,54 @@ import AVFoundation
             let query = NSAppleScript(source: SceneMediaProvider.metadataScript(for: source))
             let queryCompiles = query?.compileAndReturnError(&scriptError) == true
             try check(queryCompiles, "fixed \(source.title) metadata query compiles without executing automation: \(scriptError ?? [:])")
+            let processQuery = NSAppleScript(source: SceneMediaProvider.metadataProcessScript(for: source))
+            let processQueryCompiles = processQuery?.compileAndReturnError(&scriptError) == true
+            try check(processQueryCompiles, "fixed \(source.title) subprocess query compiles without executing automation: \(scriptError ?? [:])")
         }
         try check(!SceneMediaProvider.metadataScript(for: .spotify).contains("/ 1000.0"), "Spotify duration is kept in the seconds used by its Apple Event dictionary")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("LumaTests-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        currentPhase = "asynchronous project import responsiveness and cancellation"
+        let largeProject = root.appendingPathComponent("many-assets-project", isDirectory: true)
+        let projectAssets = largeProject.appendingPathComponent("assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectAssets, withIntermediateDirectories: true)
+        try Data("{\"title\":\"Import responsiveness fixture\",\"type\":\"web\",\"file\":\"index.html\"}".utf8)
+            .write(to: largeProject.appendingPathComponent("project.json"))
+        try Data("<!doctype html><title>Import fixture</title>".utf8).write(to: largeProject.appendingPathComponent("index.html"))
+        for index in 0..<2_500 {
+            try Data("asset-\(index)".utf8).write(to: projectAssets.appendingPathComponent("asset-\(index).txt"))
+        }
+
+        let cancelledCopyLibrary = LibraryStore(root: root.appendingPathComponent("cancelled-project-copy-library"))
+        let cancelledCopyMediaRoot = cancelledCopyLibrary.root.appendingPathComponent("Media", isDirectory: true)
+        try FileManager.default.createDirectory(at: cancelledCopyMediaRoot, withIntermediateDirectories: true)
+        let mediaBeforeCancelledCopy = Set(try FileManager.default.contentsOfDirectory(atPath: cancelledCopyMediaRoot.path))
+        let cancelledCopy = Task { try await cancelledCopyLibrary.importURL(largeProject) }
+        while !cancelledCopyLibrary.hasImportInProgress { await Task.yield() }
+        cancelledCopy.cancel()
+        do { try await cancelledCopy.value; throw LumaError("FAILED: cancelled project copy published a wallpaper") }
+        catch is CancellationError { assertions += 1 }
+        let mediaAfterCancelledCopy = Set(try FileManager.default.contentsOfDirectory(atPath: cancelledCopyMediaRoot.path))
+        try check(!cancelledCopyLibrary.hasImportInProgress &&
+                  !cancelledCopyLibrary.state.wallpapers.contains(where: { !$0.isBuiltIn }) &&
+                  mediaAfterCancelledCopy == mediaBeforeCancelledCopy &&
+                  FileManager.default.fileExists(atPath: largeProject.appendingPathComponent("project.json").path),
+                  "cancelling an asynchronous project copy removes partial managed data and preserves the source")
+
+        let responsiveImportLibrary = LibraryStore(root: root.appendingPathComponent("responsive-import-library"))
+        var responsiveImportFinished = false
+        var mainActorRanDuringImport = false
+        let mainActorHeartbeat = Task { @MainActor in
+            try await Task.sleep(for: .milliseconds(10))
+            mainActorRanDuringImport = responsiveImportLibrary.hasImportInProgress && !responsiveImportFinished
+        }
+        try await responsiveImportLibrary.importURL(largeProject)
+        responsiveImportFinished = true
+        try await mainActorHeartbeat.value
+        try check(mainActorRanDuringImport && responsiveImportLibrary.state.wallpapers.contains(where: { $0.title == "Import responsiveness fixture" }),
+                  "large project validation and copying leave the main actor responsive and publish after success")
+
         let unsafePreferenceRoot = root.appendingPathComponent("UnsafePreferences")
         try FileManager.default.createDirectory(at: unsafePreferenceRoot, withIntermediateDirectories: true)
         var unsafePreferences = SavedLibrary(); unsafePreferences.preferences.playlistSeconds = 1e300
@@ -168,9 +217,11 @@ import AVFoundation
             let pendingLibrary = LibraryStore(root: root.appendingPathComponent("pending-playback-library"))
             try await pendingLibrary.importURL(fixture)
             pendingLibrary.state.preferences.restoreAtLaunch = false
-            pendingLibrary.state.preferences.paused = true
+            pendingLibrary.state.preferences.paused = false
             let pendingEngine = DesktopEngine(library: pendingLibrary)
             defer { pendingEngine.shutdown() }
+            try check(!pendingEngine.isTrackingPointer, "no cursor polling timer runs without an active scene")
+            pendingLibrary.state.preferences.paused = true
             pendingEngine.apply(pendingLibrary.state.wallpapers[0], to: screen.persistentID)
             guard let waiting = pendingEngine.pending[screen.persistentID], let waitingPlayer = waiting.player else {
                 throw LumaError("FAILED: the isolated desktop fixture did not create a pending video surface")
@@ -188,6 +239,9 @@ import AVFoundation
                 try await Task.sleep(for: .milliseconds(50))
             }
             try check(waiting.ready && waitingPlayer.rate == 0, "a paused desktop video still renders its first frame without advancing playback")
+            pendingLibrary.state.preferences.paused = false; pendingEngine.updatePolicy()
+            try check(!pendingEngine.isTrackingPointer && waitingPlayer.rate > 0, "running native video playback does not start a scene cursor timer")
+            pendingLibrary.state.preferences.paused = true; pendingEngine.updatePolicy()
             let videoID = pendingLibrary.state.wallpapers[0].id
             pendingLibrary.edit(videoID) { $0.propertiesJSON = "{\"temporary\":true}" }
             guard let obsolete = pendingEngine.pending[screen.persistentID] else { throw LumaError("FAILED: content edit did not stage a replacement video") }

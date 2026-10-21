@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 
 @main struct EditorTests {
     @MainActor static func main() {
@@ -29,6 +30,20 @@ import AppKit
         let project = try store.create(title: "Round Trip")
         try expect(store.projects.count == 1, "create project registers it")
         try expect(store.recentProjectIDs.first == project.id, "open project is recent")
+
+        let workspace = SceneEditorWorkspaceModel(store: store, library: library, project: project, assets: nil, preferences: AppPreferences())
+        var workspaceNotifications = 0, clockNotifications = 0
+        let workspaceObservation = workspace.objectWillChange.sink { workspaceNotifications += 1 }
+        let clockObservation = workspace.previewClock.objectWillChange.sink { clockNotifications += 1 }
+        for sample in 1...100 { workspace.previewTime = Double(sample) }
+        try expect(workspaceNotifications == 0 && clockNotifications == 100, "renderer clock samples update only the timeline, without invalidating the full editor or rescanning assets")
+        let slider = workspace.timelinePosition
+        try expect(slider.wrappedValue == 60 && workspace.previewTime == 100, "displaying a clock beyond the slider range never seeks playback back to 60 seconds")
+        slider.wrappedValue = 12.5
+        try expect(workspace.previewTime == 12.5, "explicit timeline scrubbing still changes preview time")
+        workspace.seek(.infinity)
+        try expect(workspace.previewTime == 12.5, "invalid scrub input cannot corrupt preview time")
+        workspaceObservation.cancel(); clockObservation.cancel()
 
         let projectFolder = store.folder(for: project)
         let packageURL = projectFolder.appendingPathComponent(project.entry)

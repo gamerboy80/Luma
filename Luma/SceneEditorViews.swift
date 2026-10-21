@@ -123,6 +123,10 @@ struct SceneEditorHomeView: View {
     private func perform(_ action: () throws -> Void) { do { try action() } catch { library.error = error.localizedDescription } }
 }
 
+@MainActor final class SceneEditorPreviewClock: ObservableObject {
+    @Published var time = 0.0
+}
+
 @MainActor final class SceneEditorWorkspaceModel: ObservableObject {
     @Published var document: SceneProjectDocument?
     @Published var project: EditorProject
@@ -134,7 +138,14 @@ struct SceneEditorHomeView: View {
     @Published var previewParticles = "high"
     @Published var previewPostProcessing = "high"
     @Published var previewGeneration = 0
-    @Published var previewTime = 0.0
+    let previewClock = SceneEditorPreviewClock()
+    var previewTime: Double {
+        get { previewClock.time }
+        set { if previewClock.time != newValue { previewClock.time = newValue } }
+    }
+    var timelinePosition: Binding<Double> {
+        Binding(get: { min(60, max(0, self.previewTime)) }, set: { self.seek($0) })
+    }
     @Published var rendererAvailable = false
     @Published var isPlaying = true
     @Published var isSnapping = true
@@ -180,27 +191,34 @@ struct SceneEditorHomeView: View {
     func refreshRenderer() async {
         guard let host else { return }
         let generation = rendererGeneration
-        let available = await host.editorAvailable()
-        let layers = available ? (try? await host.editorLayers()) ?? [] : []
-        let time = await host.editorTime()
-        let diagnostics = await host.editorScriptDiagnostics()
-        let skipped = await host.editorSkippedScriptCount()
-        guard self.host === host, rendererGeneration == generation else { return }
-        rendererAvailable = available; rendererLayers = layers; previewTime = time
-        scriptDiagnostics = diagnostics; skippedScriptCount = skipped
-        lastDiagnosticPoll = Date()
+        do {
+            let snapshot = try await host.editorSnapshot(includeLayers: true, includeDiagnostics: true)
+            guard !Task.isCancelled, self.host === host, rendererGeneration == generation else { return }
+            rendererAvailable = snapshot.available; rendererLayers = snapshot.layers ?? []; previewTime = snapshot.time
+            applyDiagnostics(snapshot)
+        } catch {
+            guard !Task.isCancelled, self.host === host, rendererGeneration == generation else { return }
+            status = "Could not refresh the scene preview: \(error.localizedDescription)"
+        }
     }
     func tick() async {
-        guard let host else { return }
+        guard let host, host.didBecomeReady else { return }
         let generation = rendererGeneration
-        let time = isPlaying ? await host.editorTime() : previewTime
-        guard self.host === host, rendererGeneration == generation else { return }
-        if isPlaying { previewTime = time }
-        guard Date().timeIntervalSince(lastDiagnosticPoll) >= 1 else { return }
-        let diagnostics = await host.editorScriptDiagnostics()
-        let skipped = await host.editorSkippedScriptCount()
-        guard self.host === host, rendererGeneration == generation else { return }
-        scriptDiagnostics = diagnostics; skippedScriptCount = skipped
+        let includeDiagnostics = Date().timeIntervalSince(lastDiagnosticPoll) >= 1
+        guard isPlaying || includeDiagnostics else { return }
+        do {
+            let snapshot = try await host.editorSnapshot(includeDiagnostics: includeDiagnostics)
+            guard !Task.isCancelled, self.host === host, rendererGeneration == generation else { return }
+            if isPlaying, previewTime != snapshot.time { previewTime = snapshot.time }
+            if includeDiagnostics { applyDiagnostics(snapshot) }
+        } catch {
+            guard !Task.isCancelled, self.host === host, rendererGeneration == generation else { return }
+            status = "Could not refresh the scene preview: \(error.localizedDescription)"
+        }
+    }
+    private func applyDiagnostics(_ snapshot: SceneHost.EditorSnapshot) {
+        if let diagnostics = snapshot.diagnostics, scriptDiagnostics != diagnostics { scriptDiagnostics = diagnostics }
+        if let skipped = snapshot.skippedScripts, skippedScriptCount != skipped { skippedScriptCount = skipped }
         lastDiagnosticPoll = Date()
     }
     func select(_ index: Int, extending: Bool) {
@@ -337,6 +355,8 @@ struct SceneEditorHomeView: View {
     func playPause() { isPlaying.toggle(); host?.setPlaying(isPlaying) }
     func applyPreviewQuality() { host?.editorSetPreviewQuality(antiAliasing: previewAntiAliasing, particles: previewParticles, postProcessing: previewPostProcessing) }
     func seek(_ time: Double) {
+        guard time.isFinite else { return }
+        let time = max(0, min(86_400, time))
         previewTime = time
         guard let host else { return }
         let generation = rendererGeneration
@@ -371,7 +391,6 @@ struct SceneEditorWorkspace: View {
     @State private var panGestureStart: CGSize?
     @State private var zoomGestureStart: Double?
     @State private var timelineFPS = 30
-    @State private var timelinePosition = 0.0
     @State private var sceneJSON = "{}"
     @State private var selectedAsset: URL?
     @State private var assetPreviewPlayer: AVPlayer?
@@ -518,31 +537,8 @@ struct SceneEditorWorkspace: View {
                 if !model.rendererAvailable && model.document != nil { Text("Loading preview…").font(.system(size: 10)).padding(7).background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6)).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(12).allowsHitTesting(false) }
             }.clipped()
             Divider().opacity(0.35)
-            timelinePanel
+            EditorTimelinePanel(model: model, clock: model.previewClock, fps: $timelineFPS)
         }
-    }
-
-    private var timelinePanel: some View {
-        VStack(spacing: 7) {
-            HStack(spacing: 8) {
-                Text("TIMELINE").font(.system(size: 9, weight: .semibold)).tracking(1).foregroundStyle(.secondary)
-                Text(String(format: "%06.2f s", model.previewTime)).font(.system(size: 10, design: .monospaced)).frame(width: 78)
-                Slider(value: $timelinePosition, in: 0...60, onEditingChanged: { editing in if !editing { model.seek(timelinePosition) } }).onChange(of: timelinePosition) { _, value in model.seek(value) }
-                Picker("Frame Rate", selection: $timelineFPS) { ForEach([15, 24, 30, 60], id: \.self) { Text("\($0) fps").tag($0) } }.labelsHidden().frame(width: 85)
-            }
-            HStack(spacing: 7) {
-                Text("Scene clock").font(.system(size: 9)).foregroundStyle(.secondary)
-                Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
-                if let index = model.selectedLayers.sorted().first, let layer = model.document?.objects[index] {
-                    Text(layer["name"] as? String ?? "Layer \(index + 1)").font(.system(size: 9)).lineLimit(1)
-                    let animationKeys = layer.keys.filter { ["animation", "animations", "animationlayers"].contains($0.lowercased()) }
-                    if !animationKeys.isEmpty { Text("Existing animation data: \(animationKeys.joined(separator: ", "))").font(.system(size: 8, design: .monospaced)).foregroundStyle(editorAccent) }
-                }
-                Spacer()
-                Text("Keyframe editing is unavailable in this pinned renderer API").font(.system(size: 8)).foregroundStyle(.secondary)
-            }
-        }.padding(.horizontal, 12).padding(.vertical, 9).frame(height: 66).background(.white.opacity(0.018))
-            .onChange(of: model.previewTime) { _, value in timelinePosition = min(60, value) }
     }
 
     private var inspector: some View {
@@ -643,6 +639,34 @@ struct SceneEditorWorkspace: View {
         while !Task.isCancelled {
             await model.tick(); try? await Task.sleep(for: .milliseconds(200))
         }
+    }
+}
+
+private struct EditorTimelinePanel: View {
+    @ObservedObject var model: SceneEditorWorkspaceModel
+    @ObservedObject var clock: SceneEditorPreviewClock
+    @Binding var fps: Int
+
+    var body: some View {
+        VStack(spacing: 7) {
+            HStack(spacing: 8) {
+                Text("TIMELINE").font(.system(size: 9, weight: .semibold)).tracking(1).foregroundStyle(.secondary)
+                Text(String(format: "%06.2f s", clock.time)).font(.system(size: 10, design: .monospaced)).frame(width: 78)
+                Slider(value: model.timelinePosition, in: 0...60)
+                Picker("Frame Rate", selection: $fps) { ForEach([15, 24, 30, 60], id: \.self) { Text("\($0) fps").tag($0) } }.labelsHidden().frame(width: 85)
+            }
+            HStack(spacing: 7) {
+                Text("Scene clock").font(.system(size: 9)).foregroundStyle(.secondary)
+                Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
+                if let index = model.selectedLayers.sorted().first, let layer = model.document?.objects[index] {
+                    Text(layer["name"] as? String ?? "Layer \(index + 1)").font(.system(size: 9)).lineLimit(1)
+                    let animationKeys = layer.keys.filter { ["animation", "animations", "animationlayers"].contains($0.lowercased()) }
+                    if !animationKeys.isEmpty { Text("Existing animation data: \(animationKeys.joined(separator: ", "))").font(.system(size: 8, design: .monospaced)).foregroundStyle(editorAccent) }
+                }
+                Spacer()
+                Text("Keyframe editing is unavailable in this pinned renderer API").font(.system(size: 8)).foregroundStyle(.secondary)
+            }
+        }.padding(.horizontal, 12).padding(.vertical, 9).frame(height: 66).background(.white.opacity(0.018))
     }
 }
 

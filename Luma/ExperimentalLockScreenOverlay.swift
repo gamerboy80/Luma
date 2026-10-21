@@ -234,6 +234,10 @@ import CryptoKit
                 guard let self, self.enabled, !self.shuttingDown else { return }
                 if let current = Self.sessionLocked(), current != self.locked {
                     if current { self.screenLocked() } else { self.screenUnlocked() }
+                } else if self.locked {
+                    // Authentication windows can appear after the lock notification
+                    // or change when the user starts entering their password.
+                    self.updateVisibility()
                 }
             }
         }
@@ -249,17 +253,25 @@ import CryptoKit
 
     private func updateVisibility() {
         monitorSession()
-        let visible = enabled && locked && !sleeping && !shuttingDown
-        privateSpace?.setVisible(visible)
+        let requested = enabled && locked && !sleeping && !shuttingDown
+        privateSpace?.setVisible(requested)
+        var protectedDisplays = 0
         for surface in surfaces.values {
-            surface.host.setPlaying(visible)
-            if visible {
+            if requested && surface.orderBelowAuthenticationUI() {
+                protectedDisplays += 1
                 surface.window.alphaValue = 1
-                surface.window.orderFrontRegardless()
+                surface.host.setPlaying(true)
             } else {
                 surface.window.alphaValue = 0
                 surface.window.orderOut(nil)
+                surface.host.setPlaying(false)
             }
+        }
+        if requested && protectedDisplays < surfaces.count {
+            status = "macOS did not verify the scene below its login controls on every display. Unsafe overlays are hidden; use Prepare Static Fallback."
+            if protectedDisplays == 0 { privateSpace?.setVisible(false) }
+        } else if requested {
+            status = "Experimental scene overlay is below the detected macOS authentication windows."
         }
         updateDetails()
     }
@@ -286,9 +298,11 @@ import CryptoKit
 @MainActor private final class LockSceneSurface {
     let window: LockSceneWindow
     let host: SceneHost
+    private let displayBounds: CGRect
 
     init(screen: NSScreen, host: SceneHost) {
         self.host = host
+        displayBounds = CGDisplayBounds(screen.displayID)
         window = LockSceneWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false, screen: screen)
         window.setFrame(screen.frame, display: true)
         window.isReleasedWhenClosed = false
@@ -309,7 +323,22 @@ import CryptoKit
         host.webView.frame = window.contentView?.bounds ?? screen.frame
         host.webView.autoresizingMask = [.width, .height]
         window.displayIfNeeded()
-        window.orderFrontRegardless()
+        window.orderBack(nil)
+    }
+
+    func orderBelowAuthenticationUI() -> Bool {
+        func windows() -> [[String: Any]] {
+            CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+        }
+        let before = windows()
+        let authentication = LockOverlayStacking.authenticationWindows(in: before, screen: displayBounds)
+        if window.isVisible && LockOverlayStacking.isBelowAuthentication(window: window.windowNumber, authentication: authentication, orderedWindows: before) { return true }
+        window.alphaValue = 0
+        guard let bottomAuthenticationWindow = authentication.last else { return false }
+        window.order(.below, relativeTo: bottomAuthenticationWindow)
+        let after = windows()
+        let currentAuthentication = LockOverlayStacking.authenticationWindows(in: after, screen: displayBounds)
+        return window.isVisible && LockOverlayStacking.isBelowAuthentication(window: window.windowNumber, authentication: currentAuthentication, orderedWindows: after)
     }
 
     func stop() {

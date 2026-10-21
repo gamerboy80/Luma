@@ -3,6 +3,108 @@ import AVFoundation
 import Combine
 import UniformTypeIdentifiers
 
+private struct PreparedLibraryImport: Sendable {
+    let kind: WallpaperKind
+    let entry: String
+    let title: String
+    let preview: String?
+    let tags: [String]
+    let contentSHA256: String?
+}
+
+private enum LibraryImportFileOperations {
+    static func sourceIsDirectory(_ source: URL) throws -> Bool {
+        let values = try source.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
+        guard values.isSymbolicLink != true, values.isDirectory == true || values.isRegularFile == true else {
+            throw LumaError("Choose a regular media file or real project folder, not a symbolic link or special file.")
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: source.path, isDirectory: &isDirectory) else {
+            throw LumaError("The selected file no longer exists.")
+        }
+        return isDirectory.boolValue
+    }
+
+    static func projects(in folder: URL) throws -> [URL] {
+        let children = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+        return children.filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("project.json").path) }
+    }
+
+    static func prepare(source: URL, projectFolder: URL, isProject: Bool, destination: URL,
+                        sourceDigest: String?, titleOverride: String?, safeSingleFileRoot: URL?) throws -> PreparedLibraryImport {
+        try Task.checkCancellation()
+        let fileManager = FileManager.default
+        var object: [String: Any] = [:]
+        if isProject {
+            let projectFile = try Safety.child("project.json", under: projectFolder)
+            let attributes = try fileManager.attributesOfItem(atPath: projectFile.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular,
+                  let size = attributes[.size] as? NSNumber, size.uint64Value <= 64 * 1024 * 1024 else {
+                throw LumaError("project.json must be a regular file no larger than 64 MiB.")
+            }
+            object = try JSONSerialization.jsonObject(with: Data(contentsOf: projectFile)) as? [String: Any] ?? [:]
+        }
+
+        let ext = source.pathExtension.lowercased()
+        let type = (object["type"] as? String)?.lowercased()
+        let kind: WallpaperKind
+        if isProject {
+            guard let parsed = WallpaperKind(rawValue: type ?? "") else {
+                throw LumaError("This project type is not supported. Application wallpapers cannot run on macOS.")
+            }
+            kind = parsed
+        } else if ["mp4", "mov", "m4v", "webm"].contains(ext) { kind = .video }
+        else if ["jpg", "jpeg", "png", "heic", "gif", "webp"].contains(ext) { kind = .image }
+        else if ["html", "htm"].contains(ext) { kind = .web }
+        else if ext == "pkg" { kind = .scene }
+        else { throw LumaError("Choose a video, image, HTML page, scene.pkg, or project.json.") }
+
+        let entry = object["file"] as? String ?? (isProject ? (kind == .scene ? "scene.pkg" : "index.html") : source.lastPathComponent)
+        try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var importedDigest = sourceDigest
+        if isProject {
+            try Safety.validateProjectTree(projectFolder)
+            try Task.checkCancellation()
+            try fileManager.copyItem(at: projectFolder, to: destination)
+        } else {
+            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+            let copiedFile = destination.appendingPathComponent(entry)
+            if let safeRoot = safeSingleFileRoot {
+                importedDigest = try WallperVideosDiscoveryService.copyRegularFile(source, under: safeRoot, to: copiedFile)
+            } else {
+                guard try source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+                    throw LumaError("The selected file is a symbolic link. Copy its target into a normal file first.")
+                }
+                try Task.checkCancellation()
+                try fileManager.copyItem(at: source, to: copiedFile)
+            }
+        }
+        try Task.checkCancellation()
+
+        let declaredTarget = try Safety.child(entry, under: destination)
+        if kind == .scene && !fileManager.fileExists(atPath: declaredTarget.path) &&
+            fileManager.fileExists(atPath: destination.appendingPathComponent("scene.pkg").path) {
+            object["file"] = "scene.pkg"
+        } else if !fileManager.fileExists(atPath: declaredTarget.path) {
+            throw LumaError("The declared wallpaper file is missing: \(entry)")
+        }
+        if !isProject {
+            object = ["title": titleOverride ?? source.deletingPathExtension().lastPathComponent,
+                      "type": kind.rawValue, "file": entry]
+        }
+        let projectData = try JSONSerialization.data(withJSONObject: object)
+        try projectData.write(to: destination.appendingPathComponent("project.json"), options: .atomic)
+        try Task.checkCancellation()
+
+        return PreparedLibraryImport(kind: kind,
+                                     entry: object["file"] as? String ?? entry,
+                                     title: object["title"] as? String ?? titleOverride ?? source.deletingPathExtension().lastPathComponent,
+                                     preview: object["preview"] as? String,
+                                     tags: object["tags"] as? [String] ?? [],
+                                     contentSHA256: importedDigest)
+    }
+}
+
 @MainActor final class LibraryStore: ObservableObject {
     @Published var state = SavedLibrary()
     @Published var error: String?
@@ -161,60 +263,39 @@ import UniformTypeIdentifiers
         guard canSave else { throw LumaError("Recover the unreadable library before importing more wallpapers.") }
         activeImports += 1
         defer { activeImports -= 1 }
-        let fm = FileManager.default
-        let sourceValues = try source.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
-        guard sourceValues.isSymbolicLink != true, sourceValues.isDirectory == true || sourceValues.isRegularFile == true else { throw LumaError("Choose a regular media file or real project folder, not a symbolic link or special file.") }
-        var directory: ObjCBool = false
-        guard fm.fileExists(atPath: source.path, isDirectory: &directory) else { throw LumaError("The selected file no longer exists.") }
-        if directory.boolValue && !fm.fileExists(atPath: source.appendingPathComponent("project.json").path) {
-            let children = try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
-            let projects = children.filter { fm.fileExists(atPath: $0.appendingPathComponent("project.json").path) }
+        let directory = try await Task.detached(priority: .utility) {
+            try LibraryImportFileOperations.sourceIsDirectory(source)
+        }.value
+        if directory && !FileManager.default.fileExists(atPath: source.appendingPathComponent("project.json").path) {
+            let projects = try await Task.detached(priority: .utility) {
+                try LibraryImportFileOperations.projects(in: source)
+            }.value
             guard !projects.isEmpty else { throw LumaError("No project.json files were found. Choose a Wallpaper Engine project folder.") }
             for child in projects { try await importURL(child, workshopID: child.lastPathComponent.range(of: "^[0-9]+$", options: .regularExpression) != nil ? child.lastPathComponent : nil) }
             return
         }
-        let projectFolder = directory.boolValue ? source : source.deletingLastPathComponent()
-        let isProject = directory.boolValue || source.lastPathComponent == "project.json"
-        var object: [String: Any] = [:]
-        if isProject { object = try JSONSerialization.jsonObject(with: Data(contentsOf: projectFolder.appendingPathComponent("project.json"))) as? [String: Any] ?? [:] }
-        let ext = source.pathExtension.lowercased()
-        let type = (object["type"] as? String)?.lowercased()
-        let kind: WallpaperKind
-        if isProject { guard let k = WallpaperKind(rawValue: type ?? "") else { throw LumaError("This project type is not supported. Application wallpapers cannot run on macOS.") }; kind = k }
-        else if ["mp4","mov","m4v","webm"].contains(ext) { kind = .video }
-        else if ["jpg","jpeg","png","heic","gif","webp"].contains(ext) { kind = .image }
-        else if ["html","htm"].contains(ext) { kind = .web }
-        else if ext == "pkg" { kind = .scene }
-        else { throw LumaError("Choose a video, image, HTML page, scene.pkg, or project.json.") }
-        let entry = object["file"] as? String ?? (isProject ? (kind == .scene ? "scene.pkg" : "index.html") : source.lastPathComponent)
+        let projectFolder = directory ? source : source.deletingLastPathComponent()
+        let isProject = directory || source.lastPathComponent == "project.json"
         let id = UUID(); let destination = root.appendingPathComponent("Media/\(id.uuidString)", isDirectory: true)
         _ = try Safety.child("Media/\(id.uuidString)", under: root)
-        try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        var importedDigest = sourceDigest
         do {
-            if isProject {
-                // Copy only regular files and directories; reject symlinks before copying.
-                try validateTree(projectFolder)
-                try fm.copyItem(at: projectFolder, to: destination)
-            } else {
-                try fm.createDirectory(at: destination, withIntermediateDirectories: true)
-                let copiedFile = destination.appendingPathComponent(entry)
-                if let safeRoot = safeSingleFileRoot {
-                    importedDigest = try WallperVideosDiscoveryService.copyRegularFile(source, under: safeRoot, to: copiedFile)
-                } else {
-                    guard try source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else { throw LumaError("The selected file is a symbolic link. Copy its target into a normal file first.") }
-                    try fm.copyItem(at: source, to: copiedFile)
-                }
+            let copyTask = Task.detached(priority: .utility) {
+                try LibraryImportFileOperations.prepare(source: source, projectFolder: projectFolder,
+                                                        isProject: isProject, destination: destination,
+                                                        sourceDigest: sourceDigest, titleOverride: titleOverride,
+                                                        safeSingleFileRoot: safeSingleFileRoot)
             }
-            let target = try Safety.child(entry, under: destination)
-            if kind == .scene && !fm.fileExists(atPath: target.path) && fm.fileExists(atPath: destination.appendingPathComponent("scene.pkg").path) { object["file"] = "scene.pkg" }
-            else if !fm.fileExists(atPath: target.path) { throw LumaError("The declared wallpaper file is missing: \(entry)") }
-            if !isProject {
-                object = ["title": titleOverride ?? source.deletingPathExtension().lastPathComponent, "type": kind.rawValue, "file": entry]
+            let prepared = try await withTaskCancellationHandler {
+                try await copyTask.value
+            } onCancel: {
+                copyTask.cancel()
             }
-            try JSONSerialization.data(withJSONObject: object).write(to: destination.appendingPathComponent("project.json"), options: .atomic)
-            var wallpaper = Wallpaper(id: id, title: object["title"] as? String ?? source.deletingPathExtension().lastPathComponent, kind: kind, folder: id.uuidString, entry: object["file"] as? String ?? entry, preview: object["preview"] as? String, tags: object["tags"] as? [String] ?? [], workshopID: workshopID)
-            wallpaper.contentSHA256 = importedDigest
+            try Task.checkCancellation()
+            var wallpaper = Wallpaper(id: id, title: prepared.title, kind: prepared.kind, folder: id.uuidString,
+                                      entry: prepared.entry, preview: prepared.preview, tags: prepared.tags,
+                                      workshopID: workshopID)
+            wallpaper.contentSHA256 = prepared.contentSHA256
+            let kind = prepared.kind
             if kind == .video {
                 let asset = AVURLAsset(url: try Safety.child(wallpaper.entry, under: destination))
                 guard try await asset.load(.isPlayable), let track = try await asset.loadTracks(withMediaType: .video).first else { throw LumaError("macOS cannot decode this video. Convert it to H.264 or HEVC MP4/MOV first.") }
@@ -235,7 +316,7 @@ import UniformTypeIdentifiers
                 state.wallpapers.removeAll { $0.id == wallpaper.id }
                 throw LumaError(error ?? "Luma could not save the imported wallpaper to its library.")
             }
-        } catch { try? fm.removeItem(at: destination); throw error }
+        } catch { try? FileManager.default.removeItem(at: destination); throw error }
     }
     private struct ClearTargets {
         let mediaRoot: URL
@@ -382,9 +463,6 @@ import UniformTypeIdentifiers
             owned.append(child)
         }
         return owned
-    }
-    private func validateTree(_ root: URL) throws {
-        try Safety.validateProjectTree(root)
     }
     func download(_ string: String) {
         guard downloadTask == nil else { return }

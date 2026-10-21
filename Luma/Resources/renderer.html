@@ -10,19 +10,33 @@ window.lumaMount=async options=>{try{window.wallpaper=await WebWallGL.mount(docu
 window.lumaCapture=async(time,width,height)=>{
  const controls=WebWallGL.editorOf(window.wallpaper);
  const canvas=await controls.captureFrame({time,width,height});
+ if(!(canvas?.width>0&&canvas?.height>0))throw Error(`Capture returned an empty canvas (${canvas?.width}×${canvas?.height}).`);
  const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
- if(blob)return await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(blob)});
- return canvas.toDataURL('image/png');
+ if(blob){
+  const data=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(blob)});
+  if(typeof data==='string'&&data.startsWith('data:image/png;base64,'))return data;
+ }
+ const data=canvas.toDataURL('image/png');
+ if(data.startsWith('data:image/png;base64,'))return data;
+ // Some hosted WebKit graphics configurations cannot encode canvas PNGs. Keep
+ // the exact captured pixels for the native compositor snapshot fallback.
+ const error=Error(`Canvas PNG encoding unavailable (${canvas.width}×${canvas.height}, blob type ${blob?.type||'none'}, data URL ${data.slice(0,80)}).`);
+ error.lumaCaptureCanvas=canvas;
+ throw error;
 };
+window.lumaFinishCapture=()=>document.getElementById('luma-capture-output')?.remove();
 window.lumaCaptureBridge=async(time,width,height)=>{
  try{
   const data=await window.lumaCapture(time,width,height);
   if(typeof data!=='string')return JSON.stringify({ok:false,error:`Capture returned ${data===null?'null':typeof data}, expected a PNG data URL.`});
   return JSON.stringify({ok:true,data});
  }catch(error){
+  const canvas=error?.lumaCaptureCanvas;
+  const snapshot=canvas instanceof HTMLCanvasElement&&canvas.width>0&&canvas.height>0;
+  if(snapshot){window.lumaFinishCapture();canvas.id='luma-capture-output';canvas.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;z-index:2147483647;pointer-events:none';document.body.appendChild(canvas);}
   const message=String(error?.message||error);
   const stack=typeof error?.stack==='string'?error.stack:'';
-  return JSON.stringify({ok:false,error:stack?`${message}\n${stack}`:message});
+  return JSON.stringify({ok:false,snapshot,error:stack?`${message}\n${stack}`:message});
  }
 };
 window.lumaEditorAvailable=()=>!!WebWallGL.editorOf(window.wallpaper);
@@ -39,6 +53,13 @@ window.lumaEditorCanAdd=spec=>WebWallGL.editorOf(window.wallpaper)?.canHotAddLay
 window.lumaEditorSetAnimations=(id,layers)=>WebWallGL.editorOf(window.wallpaper)?.setAnimationLayers(id,layers);
 window.lumaEditorScriptIssues=()=>WebWallGL.editorOf(window.wallpaper)?.getScriptIssues()||[];
 window.lumaEditorSkippedScripts=()=>WebWallGL.editorOf(window.wallpaper)?.getSkippedScripts()||0;
+window.lumaEditorSnapshot=(includeLayers,includeDiagnostics)=>{
+ const editor=WebWallGL.editorOf(window.wallpaper);
+ const result={available:!!editor,time:editor?.time||0};
+ if(includeLayers)result.layers=(editor?.getLayers()||[]).slice(0,5001);
+ if(includeDiagnostics){result.issues=(editor?.getScriptIssues()||[]).slice(0,64);result.skipped=editor?.getSkippedScripts()||0;}
+ return result;
+};
 window.lumaDecodeTexture=async base64=>{
  const bytes=Uint8Array.from(atob(base64),c=>c.charCodeAt(0));
  const parsed=WebWallGL.parseTex(bytes);

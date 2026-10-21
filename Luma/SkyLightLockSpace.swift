@@ -1,6 +1,31 @@
 import AppKit
 import Darwin
 
+/// Window levels inside an unmanaged space do not establish ordering relative
+/// to loginwindow's other spaces. Require observable global stacking instead.
+enum LockOverlayStacking {
+    static func authenticationWindows(in windows: [[String: Any]], screen: CGRect) -> [Int] {
+        windows.compactMap { info in
+            let owner = (info[kCGWindowOwnerName as String] as? String ?? "").lowercased()
+            guard ["loginwindow", "securityagent", "authuihelper"].contains(owner),
+                  info[kCGWindowIsOnscreen as String] as? Bool == true,
+                  let id = info[kCGWindowNumber as String] as? Int,
+                  let bounds = info[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary), rect.intersects(screen) else { return nil }
+            return id
+        }
+    }
+
+    static func isBelowAuthentication(window: Int, authentication: [Int], orderedWindows: [[String: Any]]) -> Bool {
+        guard !authentication.isEmpty,
+              let overlayIndex = orderedWindows.firstIndex(where: { $0[kCGWindowNumber as String] as? Int == window }) else { return false }
+        return authentication.allSatisfy { id in
+            guard let index = orderedWindows.firstIndex(where: { $0[kCGWindowNumber as String] as? Int == id }) else { return false }
+            return index < overlayIndex
+        }
+    }
+}
+
 /// SkyLight is private. In particular, its space mutators do not return CGError:
 /// reading their return register as an error rejected successful operations on
 /// macOS 27. Validate the observable level, membership and destruction instead.
@@ -50,10 +75,17 @@ import Darwin
     }
 
     func attach(_ window: NSWindow) throws {
-        guard !removed, window.windowNumber > 0 else { throw LumaError("The lock-screen window is no longer available.") }
-        operations.attach(id, window.windowNumber)
-        guard try operations.windowSpaces(window.windowNumber).contains(id) else {
-            throw LumaError("WindowServer did not attach scene window \(window.windowNumber) to Luma's lock-screen space.")
+        try attach(windowNumber: window.windowNumber)
+    }
+
+    /// Host-side entry point shared with the NSWindow wrapper. Keeping the
+    /// verified WindowServer identifier explicit lets simulated tests exercise
+    /// membership validation without requiring a live GUI window server.
+    func attach(windowNumber: Int) throws {
+        guard !removed, windowNumber > 0 else { throw LumaError("The lock-screen window is no longer available.") }
+        operations.attach(id, windowNumber)
+        guard try operations.windowSpaces(windowNumber).contains(id) else {
+            throw LumaError("WindowServer did not attach scene window \(windowNumber) to Luma's lock-screen space.")
         }
     }
 

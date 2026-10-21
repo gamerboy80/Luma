@@ -1,6 +1,37 @@
 import AppKit
 import Combine
 import Foundation
+import Darwin
+
+private final class SceneMetadataOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bytes = Data()
+    private var oversized = false
+    func append(_ data: Data) {
+        lock.lock(); defer { lock.unlock() }
+        let remaining = max(0, 65_536 - bytes.count)
+        if data.count > remaining { oversized = true }
+        bytes.append(data.prefix(remaining))
+    }
+    func result() -> (Data, Bool) { lock.lock(); defer { lock.unlock() }; return (bytes, oversized) }
+}
+
+private final class SceneMetadataQuery: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+    func start(_ value: Process) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled else { throw CancellationError() }
+        try value.run(); process = value
+    }
+    func cancel() {
+        lock.lock(); defer { lock.unlock() }
+        cancelled = true
+        if let process, process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+    }
+    func finish() { lock.lock(); process = nil; lock.unlock() }
+}
 
 private final class WeakSceneMediaProviderReference: @unchecked Sendable {
     weak var value: SceneMediaProvider?
@@ -25,6 +56,7 @@ private final class WeakSceneMediaProviderReference: @unchecked Sendable {
     private var reading = false
     private var stopped = false
     private var generation = 0
+    private var activeQuery: SceneMetadataQuery?
     private let queue = DispatchQueue(label: "dev.patrick.Luma.track-metadata", qos: .utility)
 
     struct TrackSnapshot: Equatable, Sendable {
@@ -45,6 +77,7 @@ private final class WeakSceneMediaProviderReference: @unchecked Sendable {
     func setSource(_ value: Source, save: Bool = true) {
         stopped = false
         generation += 1
+        activeQuery?.cancel(); activeQuery = nil
         timer?.invalidate(); timer = nil
         source = value; snapshot = .empty
         if save { UserDefaults.standard.set(value.rawValue, forKey: Self.preferenceKey) }
@@ -62,6 +95,7 @@ private final class WeakSceneMediaProviderReference: @unchecked Sendable {
     func stop(clearPreference: Bool = false) {
         stopped = true
         generation += 1
+        activeQuery?.cancel(); activeQuery = nil
         timer?.invalidate(); timer = nil
         snapshot = .empty
         if clearPreference { source = .off; status = "Track information is off."; UserDefaults.standard.removeObject(forKey: Self.preferenceKey) }
@@ -73,11 +107,14 @@ private final class WeakSceneMediaProviderReference: @unchecked Sendable {
             snapshot = .empty; status = "Open \(selected.title) and play a track to share its title, artist, album, and playback position."; return
         }
         reading = true
+        let query = SceneMetadataQuery()
+        activeQuery = query
         let owner = self
         queue.async {
-            let result = Self.read(selected)
+            let result = Self.read(selected, query: query)
             Task { @MainActor in
                 owner.reading = false
+                if owner.activeQuery === query { owner.activeQuery = nil }
                 guard owner.generation == token, owner.source == selected else { return }
                 switch result {
                 case .success(let value): owner.snapshot = value; owner.status = value.available ? "Receiving track metadata from \(selected.title)." : "\(selected.title) has no current track."
@@ -89,17 +126,63 @@ private final class WeakSceneMediaProviderReference: @unchecked Sendable {
             }
         }
     }
-    nonisolated static func read(_ source: Source) -> Result<TrackSnapshot, LumaError> {
-        var error: NSDictionary?
-        guard let appleScript = NSAppleScript(source: metadataScript(for: source)) else { return .failure(LumaError("Could not compile the fixed track metadata query.")) }
-        let result = appleScript.executeAndReturnError(&error)
-        if let error {
-            let code = (error[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
-            if code == -1743 { return .failure(LumaError("macOS denied track metadata access. Allow Luma to read the selected player in System Settings → Privacy & Security → Automation, then click Retry.")) }
-            return .failure(LumaError("Could not read track metadata (Apple event \(code)): \(error[NSAppleScript.errorMessage] as? String ?? "The player did not respond.")"))
+    private nonisolated static func read(_ source: Source, query: SceneMetadataQuery) -> Result<TrackSnapshot, LumaError> {
+        guard source != .off else { return .success(.empty) }
+        // NSAppleScript is a main-thread API. Executing it on the polling queue
+        // timed out despite a responsive Spotify; running it on main would stall
+        // Luma's controls. A bounded host-owned osascript process gives AppleScript
+        // its own main run loop without exposing any scripting bridge to scenes.
+        let process = Process(), output = Pipe(), input = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-"]
+        process.standardInput = input; process.standardOutput = output; process.standardError = output
+        let buffer = SceneMetadataOutput(), eof = DispatchSemaphore(value: 0)
+        output.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty { handle.readabilityHandler = nil; eof.signal() }
+            else { buffer.append(chunk) }
         }
-        guard result.numberOfItems == 8 else { return .failure(LumaError("The player returned an unsupported track metadata response.")) }
-        return .success(decode((1...8).map { result.atIndex($0)?.stringValue ?? "" }))
+        defer {
+            output.fileHandleForReading.readabilityHandler = nil
+            try? output.fileHandleForReading.close(); try? output.fileHandleForWriting.close()
+            try? input.fileHandleForReading.close(); try? input.fileHandleForWriting.close()
+        }
+        do { try query.start(process) }
+        catch { return .failure(LumaError("Could not launch the fixed metadata query: \(error.localizedDescription)")) }
+        defer { query.finish() }
+        try? output.fileHandleForWriting.close()
+        try? input.fileHandleForReading.close()
+        let deadline = DispatchWorkItem { query.cancel() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 8, execute: deadline)
+        defer { deadline.cancel() }
+        do { try input.fileHandleForWriting.write(contentsOf: Data(metadataProcessScript(for: source).utf8)); try input.fileHandleForWriting.close() }
+        catch { query.cancel(); return .failure(LumaError("Could not send the fixed metadata query.")) }
+        process.waitUntilExit()
+        guard eof.wait(timeout: .now() + 2) == .success else { return .failure(LumaError("The metadata query did not finish returning its response.")) }
+        let (data, oversized) = buffer.result()
+        guard !oversized else { return .failure(LumaError("The player metadata response exceeds Luma's 64 KiB limit.")) }
+        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+            let message = String(decoding: data.prefix(1500), as: UTF8.self)
+            if message.contains("-1743") { return .failure(LumaError("macOS denied track metadata access. Allow Luma to read the selected player in System Settings → Privacy & Security → Automation, then click Retry.")) }
+            return .failure(LumaError("Could not read \(source.title) metadata: \(message.isEmpty ? "The fixed query timed out or the player did not respond. Click Retry Metadata Connection after opening the player." : message)"))
+        }
+        return decodeResponse(data)
+    }
+    nonisolated static func decodeResponse(_ data: Data) -> Result<TrackSnapshot, LumaError> {
+        guard data.count <= 65_536, let fields = (try? JSONSerialization.jsonObject(with: data)) as? [Any], fields.count == 8,
+              fields.allSatisfy({ $0 is String || $0 is NSNumber }) else { return .failure(LumaError("The player returned an unsupported track metadata response.")) }
+        return .success(decode(fields.map { ($0 as? String) ?? ($0 as? NSNumber)?.stringValue ?? "" }))
+    }
+    nonisolated static func metadataProcessScript(for source: Source) -> String {
+        """
+        use framework "Foundation"
+        set fields to readMetadata()
+        set jsonData to current application's NSJSONSerialization's dataWithJSONObject:fields options:0 |error|:(missing value)
+        return (current application's NSString's alloc()'s initWithData:jsonData encoding:(current application's NSUTF8StringEncoding)) as text
+        on readMetadata()
+        \(metadataScript(for: source))
+        end readMetadata
+        """
     }
     nonisolated static func metadataScript(for source: Source) -> String {
         // Target and code come from a closed enum, never from wallpaper content.

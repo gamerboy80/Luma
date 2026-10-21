@@ -34,18 +34,15 @@ enum LockOverlayTests {
             windowSpaces: { _ in state.membership },
             destroy: { sid in state.destroys += 1; if !state.keepSpace { state.spaces.remove(sid) } }
         )
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 32, height: 32), styleMask: .borderless, backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false; window.alphaValue = 0; window.ignoresMouseEvents = true
-        defer { window.close() }
         let space = try SkyLightLockSpace(operations: operations)
         try check(state.level == 400 && state.shows == 1, "Void mutators should succeed through verified postconditions")
-        try space.attach(window)
+        try space.attach(windowNumber: 50)
         try check(state.membership == [id], "64-bit space ID must survive window attachment")
         space.setVisible(false); space.setVisible(true)
         try check(state.hides == 1 && state.shows == 2, "Lock/wake should show the space again and unlock should hide it")
         try check(space.remove() == nil && state.spaces.isEmpty, "Cleanup should verify that the space disappeared")
         try check(space.remove() == nil && state.destroys == 1, "Cleanup should be idempotent")
-        try rejects({ try space.attach(window) }, containing: "no longer available")
+        try rejects({ try space.attach(windowNumber: 50) }, containing: "no longer available")
 
         state = State()
         var wrongLevel = operations
@@ -57,7 +54,7 @@ enum LockOverlayTests {
         var wrongMembership = operations
         wrongMembership.windowSpaces = { _ in [] }
         let unattached = try SkyLightLockSpace(operations: wrongMembership)
-        try rejects({ try unattached.attach(window) }, containing: "did not attach")
+        try rejects({ try unattached.attach(windowNumber: 50) }, containing: "did not attach")
         try check(unattached.remove() == nil, "Failed window attachment must still allow cleanup")
 
         state = State(); state.keepSpace = true
@@ -74,6 +71,12 @@ enum LockOverlayTests {
         missingReadback.spaces = { throw LumaError("fixture readback unavailable") }
         try rejects({ _ = try SkyLightLockSpace(operations: missingReadback) }, containing: "Could not verify")
         try check(state.spaces.isEmpty, "Unreadable postconditions must still attempt cleanup")
+        let auth: [String: Any] = [kCGWindowNumber as String: 50]
+        let overlay: [String: Any] = [kCGWindowNumber as String: 60]
+        try check(LockOverlayStacking.isBelowAuthentication(window: 60, authentication: [50], orderedWindows: [auth, overlay]), "Overlay must be behind authentication UI")
+        try check(!LockOverlayStacking.isBelowAuthentication(window: 60, authentication: [50], orderedWindows: [overlay, auth]), "An overlay above login controls must stay hidden")
+        try check(!LockOverlayStacking.isBelowAuthentication(window: 60, authentication: [], orderedWindows: [overlay]), "Missing authentication windows must fail closed")
+        try check(!LockOverlayStacking.isBelowAuthentication(window: 60, authentication: [50, 51], orderedWindows: [auth, overlay]), "Unverifiable authentication ordering must fail closed")
         print("PASS: lock overlay void API calls, 64-bit IDs, lifecycle, membership validation, setup rollback, and cleanup retry")
     }
 

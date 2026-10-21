@@ -128,6 +128,7 @@ enum DesktopStillOwnership {
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var timer: Timer?
     private var pointerTimer: Timer?
+    var isTrackingPointer: Bool { pointerTimer?.isValid == true }
     private var sleeping = false
     private var locked = false
     private var previousCPUTicks: [UInt32]?
@@ -163,7 +164,16 @@ enum DesktopStillOwnership {
     }
     private func startTimers() {
         timer?.invalidate(); pointerTimer?.invalidate()
+        pointerTimer = nil
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor [weak self] in self?.tick() } }
+        refreshPointerTimer()
+    }
+    private func refreshPointerTimer() {
+        let preferences = library.state.preferences
+        let needed = !clearingData && preferences.mouseParallax && !sleeping && !locked && !preferences.paused
+            && surfaces.contains { id, surface in surface.scene != nil && pauseReasons[id]?.isEmpty != false }
+        guard needed else { pointerTimer?.invalidate(); pointerTimer = nil; return }
+        guard pointerTimer == nil else { return }
         pointerTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 24, repeats: true) { [weak self] _ in Task { @MainActor [weak self] in self?.updatePointer() } }
     }
     private func observe(_ name: Notification.Name, center: NotificationCenter, action: @escaping @MainActor () -> Void) {
@@ -275,7 +285,7 @@ enum DesktopStillOwnership {
     }
     func updatePolicy() {
         let prefs = library.state.preferences
-        let battery = onBattery()
+        let battery = prefs.pauseOnBattery && onBattery()
         let windows = prefs.pauseWhenFullscreen ? (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []) : []
         var reasons: [String: [String]] = [:]
         for screen in screens {
@@ -300,6 +310,7 @@ enum DesktopStillOwnership {
             reasons[id] = holds.sorted()
         }
         if reasons != pauseReasons { pauseReasons = reasons }
+        refreshPointerTimer()
     }
     private func onBattery() -> Bool {
         guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(), let sources = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] else { return false }

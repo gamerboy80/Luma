@@ -2,6 +2,29 @@ import Foundation
 import AppKit
 import AVFoundation
 import CryptoKit
+import WebKit
+
+private final class WallpaperSchemeTaskFixture: NSObject, WKURLSchemeTask, @unchecked Sendable {
+    let request: URLRequest
+    private let lock = NSLock()
+    private var storedResponse: URLResponse?
+    private var storedChunks: [Data] = []
+    private var storedError: Error?
+    private var storedFinished = false
+    var onData: (() -> Void)?
+    var response: URLResponse? { lock.lock(); defer { lock.unlock() }; return storedResponse }
+    var chunks: [Data] { lock.lock(); defer { lock.unlock() }; return storedChunks }
+    var error: Error? { lock.lock(); defer { lock.unlock() }; return storedError }
+    var finished: Bool { lock.lock(); defer { lock.unlock() }; return storedFinished }
+    init(url: URL) { request = URLRequest(url: url) }
+    func didReceive(_ response: URLResponse) { lock.lock(); storedResponse = response; lock.unlock() }
+    func didReceive(_ data: Data) {
+        lock.lock(); storedChunks.append(data); let callback = onData; lock.unlock()
+        callback?()
+    }
+    func didFinish() { lock.lock(); storedFinished = true; lock.unlock() }
+    func didFailWithError(_ error: Error) { lock.lock(); storedError = error; lock.unlock() }
+}
 
 @main struct SceneTests {
     @MainActor static func main() {
@@ -18,6 +41,7 @@ import CryptoKit
         let root=FileManager.default.temporaryDirectory.appendingPathComponent("LumaSceneTests-\(UUID())")
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
         defer {try? FileManager.default.removeItem(at:root)}
+        try await verifyWallpaperResourceHandler(root: root)
         let object:[String:Any] = ["general":["clearcolor":"0.015 0.035 0.06","orthogonalprojection":["width":1920,"height":1080],"bloom":false],"objects":[["id":1,"name":"Text fixture","text":"LUMA SCENE","font":"systemfont_arial","pointsize":32,"origin":"960 540 0","scale":"1 1 1","angles":"0 0 0","size":"1600 250","color":"0.43 0.88 0.75","horizontalalign":"center","verticalalign":"center","anchor":"none","padding":32,"opaquebackground":false,"maxrows":1,"maxwidth":1600]]]
         let bytes=try JSONSerialization.data(withJSONObject:object)
         let name=Data("scene.json".utf8)
@@ -46,15 +70,49 @@ import CryptoKit
         let selectedLayerID = editorLayers.first?["id"].map(String.init(describing:)) ?? "1"
         let layerProperties = try await host.editorLayerProperties(id: selectedLayerID)
         guard layerProperties != nil else { throw LumaError("The editor API could not read the selected layer properties.") }
+        do {
+            _ = try await host.webView.callAsyncJavaScript("window.__lumaOriginalRAF=window.requestAnimationFrame.bind(window);window.__lumaRAFRequests=0;window.__lumaRAFStart=performance.now();window.requestAnimationFrame=callback=>{window.__lumaRAFRequests++;return window.__lumaOriginalRAF(callback)};return true", arguments: [:], in: nil, contentWorld: .page)
+        } catch { throw LumaError("Could not instrument render scheduling: \(error.localizedDescription)") }
+        try await Task.sleep(for: .milliseconds(1_200))
+        let scheduler: [String: Any]?
+        do {
+            scheduler = try await host.webView.callAsyncJavaScript("return {requests:window.__lumaRAFRequests,elapsed:performance.now()-window.__lumaRAFStart,fps:window.wallpaper.stats.fps}", arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+        } catch { throw LumaError("Could not read render scheduler metrics: \(error.localizedDescription)") }
+        let schedulerFPS = (scheduler?["fps"] as? NSNumber)?.doubleValue ?? 0
+        let schedulerRate = Double((scheduler?["requests"] as? NSNumber)?.intValue ?? 0) / max(0.001, ((scheduler?["elapsed"] as? NSNumber)?.doubleValue ?? 0) / 1000)
+        let expectedFPS = Double(AppPreferences().sceneFPS)
+        guard schedulerFPS >= expectedFPS * 0.7, schedulerFPS <= expectedFPS * 1.2, schedulerRate < 90 else {
+            throw LumaError("The scene render scheduler exceeded its target (\(schedulerFPS.rounded()) rendered fps for a \(expectedFPS.rounded()) fps target, \(schedulerRate.rounded()) rAF requests/s).")
+        }
+        print("PASS: target-rate render scheduling (\(schedulerRate.rounded()) rAF requests/s, \(schedulerFPS.rounded()) rendered fps)")
+        _ = try await host.webView.callAsyncJavaScript("window.requestAnimationFrame=window.__lumaOriginalRAF;delete window.__lumaOriginalRAF;delete window.__lumaRAFRequests;delete window.__lumaRAFStart;return true", arguments: [:], in: nil, contentWorld: .page)
         let textHotAdd = await host.editorCanHotAdd(spec: ["duplicateOf": 1])
         guard !textHotAdd.0, !textHotAdd.1.isEmpty else { throw LumaError("The renderer's hot-add capability check did not reject an unsupported text-layer insert.") }
         host.setPlaying(false)
         await host.editorSeek(0.5)
         let seekTime = await host.editorTime()
         guard abs(seekTime - 0.5) < 0.1 else { throw LumaError("The editor timeline did not synchronize its seek with the preview clock.") }
+        try await verifyControlBridge(host)
         let hitLayers = try await host.editorHitTest(x: 160, y: 90)
         print("Editor center hit test:", Safety.json(hitLayers))
         guard hitLayers.contains(selectedLayerID) else { throw LumaError("The editor hit test did not select the visible fixture layer.") }
+        _ = try await host.webView.callAsyncJavaScript("window.__lumaPointerOriginal=window.wallpaper.pushPointer;window.__lumaPointerCalls=[];window.wallpaper.pushPointer=function(x,y,b,m){window.__lumaPointerCalls.push([x,y]);return window.__lumaPointerOriginal.call(this,x,y,b,m)};return true", arguments: [:], in: nil, contentWorld: .page)
+        for index in 0..<64 { host.pointer(x: Double(index) / 100, y: 0.5) }
+        host.pointer(x: 0.92, y: 0.73)
+        try await Task.sleep(for: .milliseconds(250))
+        for _ in 0..<64 { host.pointer(x: 0.92, y: 0.73) }
+        try await Task.sleep(for: .milliseconds(100))
+        let pointerJSON = try await host.webView.callAsyncJavaScript("return JSON.stringify(window.__lumaPointerCalls)", arguments: [:], in: nil, contentWorld: .page) as? String
+        _ = try await host.webView.callAsyncJavaScript("window.wallpaper.pushPointer=window.__lumaPointerOriginal;delete window.__lumaPointerOriginal;delete window.__lumaPointerCalls;return true", arguments: [:], in: nil, contentWorld: .page)
+        guard let pointerJSON, let pointerData = pointerJSON.data(using: .utf8),
+              let pointerCalls = try? JSONSerialization.jsonObject(with: pointerData) as? [[NSNumber]],
+              pointerCalls.count <= 2,
+              pointerCalls.last?.count == 2,
+              abs((pointerCalls.last?[0].doubleValue ?? 0) - 0.92) < 0.001,
+              abs((pointerCalls.last?[1].doubleValue ?? 0) - 0.73) < 0.001 else {
+            throw LumaError("Cursor updates were queued individually instead of coalescing to the latest position.")
+        }
+        print("PASS: scene cursor updates coalesce bursts and skip repeated positions")
         host.editorSetPreviewQuality(antiAliasing: "fxaa", particles: "medium", postProcessing: "low")
         try await Task.sleep(for: .milliseconds(100))
         let frame=try await host.capture(time:0,width:320,height:180)
@@ -113,6 +171,19 @@ import CryptoKit
         guard captureDiagnostic.contains("Capture returned null") else {
             throw LumaError("Scene capture bridge did not preserve its renderer error details: \(captureDiagnostic.isEmpty ? "capture unexpectedly succeeded" : captureDiagnostic).")
         }
+        _ = try await host.webView.callAsyncJavaScript("window.__lumaDataURL=HTMLCanvasElement.prototype.toDataURL;HTMLCanvasElement.prototype.toDataURL=function(){return 'data:,'};return true", arguments: [:], in: nil, contentWorld: .page)
+        let nativeFrame = try await host.capture(time: 0.1, width: 320, height: 180)
+        _ = try await host.webView.callAsyncJavaScript("HTMLCanvasElement.prototype.toDataURL=window.__lumaDataURL;delete window.__lumaDataURL;return true", arguments: [:], in: nil, contentWorld: .page)
+        guard let nativeBitmap = NSBitmapImageRep(data: nativeFrame), nativeBitmap.pixelsWide == 320, nativeBitmap.pixelsHigh == 180 else {
+            throw LumaError("The native snapshot fallback did not preserve the requested frame dimensions.")
+        }
+        var nativeBright = 0
+        for y in stride(from: 0, to: 180, by: 3) { for x in stride(from: 0, to: 320, by: 3) {
+            if let color = nativeBitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.greenComponent > 0.2 { nativeBright += 1 }
+        } }
+        guard nativeBright > 10 else { throw LumaError("The native snapshot fallback lost the rendered text.") }
+        let overlayRemoved = try await host.webView.callAsyncJavaScript("return document.getElementById('luma-capture-output')===null", arguments: [:], in: nil, contentWorld: .page)
+        guard overlayRemoved as? Bool == true else { throw LumaError("Native scene capture left its temporary canvas over the renderer.") }
         var bright=0
         for y in stride(from:0,to:180,by:3){for x in stride(from:0,to:320,by:3){if let color=bitmap.colorAt(x:x,y:y)?.usingColorSpace(.deviceRGB),color.greenComponent>0.2 {bright += 1}}}
         guard bright>10 else {throw LumaError("The scene capture contained no rendered text")}
@@ -145,6 +216,161 @@ import CryptoKit
         guard duration>0.8,try await asset.loadTracks(withMediaType:.video).count == 1 else {throw LumaError("Scene movie is incomplete")}
         host.stop(); window.close()
         try await verifyScripts(root: root, resources: resources, template: object)
+    }
+
+    @MainActor static func verifyControlBridge(_ host: SceneHost) async throws {
+        let snapshot = try await host.editorSnapshot(includeLayers: true, includeDiagnostics: true)
+        let lightweight = try await host.editorSnapshot()
+        guard snapshot.available, abs(snapshot.time - 0.5) < 0.1, snapshot.layers?.count == 1,
+              snapshot.layers?.first?["name"] as? String == "Text fixture", snapshot.diagnostics != nil,
+              snapshot.skippedScripts != nil, lightweight.layers == nil, lightweight.diagnostics == nil else {
+            throw LumaError("The combined editor snapshot lost layers, timeline, or diagnostic data.")
+        }
+        _ = try await host.webView.callAsyncJavaScript("""
+        window.__lumaSnapshotOriginal=window.lumaEditorSnapshot;
+        window.lumaEditorSnapshot=()=>({available:true,time:-1});return true
+        """, arguments: [:], in: nil, contentWorld: .page)
+        do { _ = try await host.editorSnapshot(); throw LumaError("An invalid snapshot was accepted.") }
+        catch let error as LumaError { guard error.message.contains("unsupported editor status") else { throw error } }
+        _ = try await host.webView.callAsyncJavaScript("window.lumaEditorSnapshot=()=>({available:true,time:0,layers:Array.from({length:5001},()=>({}))});return true", arguments: [:], in: nil, contentWorld: .page)
+        do { _ = try await host.editorSnapshot(includeLayers: true); throw LumaError("An oversized snapshot was accepted.") }
+        catch let error as LumaError { guard error.message.contains("unsupported layer") else { throw error } }
+        _ = try await host.webView.callAsyncJavaScript("""
+        window.lumaEditorSnapshot=window.__lumaSnapshotOriginal;delete window.__lumaSnapshotOriginal;
+        window.__lumaControlOriginals={};window.__lumaControlCalls={};
+        for(const name of ['pause','resume','setFps','setVolume','setFit']){
+          const original=window.wallpaper[name];window.__lumaControlOriginals[name]=original;
+          window.wallpaper[name]=function(...args){(window.__lumaControlCalls[name]??=[]).push(args);return original.apply(this,args)};
+        }return true
+        """, arguments: [:], in: nil, contentWorld: .page)
+        for _ in 0..<64 { host.setPlaying(false); host.configure(DisplayConfiguration(), preferences: AppPreferences()) }
+        host.setPlaying(true); host.setPlaying(false)
+        var config = DisplayConfiguration(), preferences = AppPreferences()
+        config.volume = 0.25; config.fit = .contain; preferences.sceneFPS = 24
+        for _ in 0..<64 { host.configure(config, preferences: preferences) }
+        config.volume = 0.5; host.configure(config, preferences: preferences)
+        let calls = try await host.webView.callAsyncJavaScript("return Object.fromEntries(Object.entries(window.__lumaControlCalls).map(([key,value])=>[key,value.length]))", arguments: [:], in: nil, contentWorld: .page) as? [String: Int]
+        guard calls == ["pause": 1, "resume": 1, "setFps": 1, "setVolume": 2, "setFit": 1] else {
+            throw LumaError("Unchanged controls repeated renderer work or dropped transitions: \(String(describing: calls)).")
+        }
+        _ = try await host.webView.callAsyncJavaScript("for(const [key,value] of Object.entries(window.__lumaControlOriginals))window.wallpaper[key]=value;delete window.__lumaControlOriginals;delete window.__lumaControlCalls;return true", arguments: [:], in: nil, contentWorld: .page)
+        host.configure(DisplayConfiguration(), preferences: AppPreferences())
+        print("PASS: atomic editor status snapshots, snapshot limits, and renderer controls skip repeated values while applying transitions")
+    }
+    @MainActor static func verifyWallpaperResourceHandler(root: URL) async throws {
+        let resourceRoot = root.appendingPathComponent("scheme-resources", isDirectory: true)
+        let outsideRoot = root.appendingPathComponent("scheme-outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: resourceRoot, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: outsideRoot, withIntermediateDirectories: false)
+
+        let payloadSize = 16 * 1024 * 1024
+        let payload = Data((0..<payloadSize).map { UInt8(truncatingIfNeeded: $0 * 31) })
+        try payload.write(to: resourceRoot.appendingPathComponent("large.bin"))
+        try payload.write(to: resourceRoot.appendingPathComponent("large.js"))
+        let shrinkingResource = resourceRoot.appendingPathComponent("shrinking.bin")
+        try payload.write(to: shrinkingResource)
+        let outsideData = Data("outside the wallpaper".utf8)
+        try outsideData.write(to: outsideRoot.appendingPathComponent("secret.bin"))
+        try FileManager.default.createSymbolicLink(at: resourceRoot.appendingPathComponent("escape.bin"), withDestinationURL: outsideRoot.appendingPathComponent("secret.bin"))
+        let reviewedSource = Data("export function update(){return 'reviewed'}".utf8)
+        try reviewedSource.write(to: resourceRoot.appendingPathComponent("scene.js"))
+
+        let scheme = WallpaperScheme(project: resourceRoot, assets: nil)
+        let webView = WKWebView(frame: .zero)
+        let streamed = WallpaperSchemeTaskFixture(url: URL(string: "luma://wallpaper/project/large.bin")!)
+        scheme.webView(webView, start: streamed)
+        let streamDeadline = Date().addingTimeInterval(10)
+        while !streamed.finished && streamed.error == nil && Date() < streamDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        guard streamed.finished, streamed.error == nil,
+              (streamed.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Length") == String(payloadSize),
+              streamed.chunks.count > 1, streamed.chunks.allSatisfy({ !$0.isEmpty && $0.count <= 1024 * 1024 }),
+              streamed.chunks.reduce(into: Data(), { $0.append($1) }) == payload else {
+            throw LumaError("Large wallpaper resources were not streamed in bounded, complete chunks: chunks=\(streamed.chunks.count), error=\(streamed.error?.localizedDescription ?? "none").")
+        }
+
+        let payloadFingerprint = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+        scheme.setApprovedScriptResources(["large.js": payloadFingerprint])
+        let reviewedStream = WallpaperSchemeTaskFixture(url: URL(string: "luma://wallpaper/project/large.js")!)
+        scheme.webView(webView, start: reviewedStream)
+        let reviewedDeadline = Date().addingTimeInterval(10)
+        while !reviewedStream.finished && reviewedStream.error == nil && Date() < reviewedDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        guard reviewedStream.finished, reviewedStream.error == nil,
+              reviewedStream.chunks.count > 1,
+              reviewedStream.chunks.allSatisfy({ !$0.isEmpty && $0.count <= 1024 * 1024 }),
+              reviewedStream.chunks.reduce(into: Data(), { $0.append($1) }) == payload else {
+            throw LumaError("A fingerprint-verified large script was not streamed from its exact reviewed snapshot.")
+        }
+
+        let cancellable = WallpaperSchemeTaskFixture(url: URL(string: "luma://wallpaper/project/large.bin")!)
+        cancellable.onData = { scheme.webView(webView, stop: cancellable) }
+        scheme.webView(webView, start: cancellable)
+        let firstChunkDeadline = Date().addingTimeInterval(5)
+        while cancellable.chunks.isEmpty && cancellable.error == nil && Date() < firstChunkDeadline {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        guard !cancellable.chunks.isEmpty else { throw LumaError("The streaming cancellation fixture did not receive its first chunk.") }
+        let stoppedChunkCount = cancellable.chunks.count
+        try await Task.sleep(for: .milliseconds(100))
+        guard !cancellable.finished, cancellable.error == nil, cancellable.chunks.count == stoppedChunkCount else {
+            throw LumaError("A stopped wallpaper resource continued delivering callbacks.")
+        }
+
+        let shrinking = WallpaperSchemeTaskFixture(url: URL(string: "luma://wallpaper/project/shrinking.bin")!)
+        shrinking.onData = {
+            if let file = try? FileHandle(forWritingTo: shrinkingResource) {
+                try? file.truncate(atOffset: 0)
+                try? file.close()
+            }
+        }
+        scheme.webView(webView, start: shrinking)
+        let shrinkingDeadline = Date().addingTimeInterval(5)
+        while shrinking.error == nil && !shrinking.finished && Date() < shrinkingDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        guard shrinking.error?.localizedDescription.contains("ended before its advertised size") == true,
+              !shrinking.finished, shrinking.chunks.count == 1 else {
+            throw LumaError("A wallpaper resource that shrank during streaming did not fail cleanly.")
+        }
+
+        let escaped = WallpaperSchemeTaskFixture(url: URL(string: "luma://wallpaper/project/escape.bin")!)
+        scheme.webView(webView, start: escaped)
+        let escapeDeadline = Date().addingTimeInterval(5)
+        while escaped.error == nil && !escaped.finished && Date() < escapeDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        guard escaped.error != nil, escaped.chunks.isEmpty else { throw LumaError("Wallpaper resource handler followed a symlink outside the active wallpaper.") }
+
+        scheme.setApprovedScriptResources(["scene.js": "not-the-current-fingerprint"])
+        let changedScript = WallpaperSchemeTaskFixture(url: URL(string: "luma://wallpaper/project/scene.js")!)
+        scheme.webView(webView, start: changedScript)
+        let scriptDeadline = Date().addingTimeInterval(5)
+        while changedScript.error == nil && !changedScript.finished && Date() < scriptDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        guard let scriptError = changedScript.error,
+              scriptError.localizedDescription.localizedCaseInsensitiveContains("changed after review"),
+              changedScript.chunks.isEmpty else {
+            throw LumaError("A changed reviewed script was not rejected before any bytes were delivered.")
+        }
+
+        scheme.setApprovedScriptResources(["large.js": "not-the-large-source-fingerprint"])
+        let changedLargeScript = WallpaperSchemeTaskFixture(url: URL(string: "luma://wallpaper/project/large.js")!)
+        scheme.webView(webView, start: changedLargeScript)
+        let largeScriptDeadline = Date().addingTimeInterval(10)
+        while changedLargeScript.error == nil && !changedLargeScript.finished && Date() < largeScriptDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let temporarySnapshots = ((try? FileManager.default.contentsOfDirectory(atPath: NSTemporaryDirectory())) ?? [])
+            .filter { $0.hasPrefix("luma-reviewed-resource-") }
+        guard changedLargeScript.error?.localizedDescription.localizedCaseInsensitiveContains("changed after review") == true,
+              changedLargeScript.chunks.isEmpty, temporarySnapshots.isEmpty else {
+            throw LumaError("A fingerprint-mismatched large script was delivered or left a temporary snapshot behind.")
+        }
+        print("PASS: bounded wallpaper streaming, cancellation, symlink containment, exact script snapshots, and fingerprint rejection")
     }
 
     @MainActor static func verifyScripts(root: URL, resources: URL, template: [String: Any]) async throws {
@@ -201,7 +427,7 @@ import CryptoKit
             while !host.didBecomeReady {
                 if let failure { throw LumaError(failure) }
                 guard Date() < deadline else {
-                    let rendererState = try? await host.webView.callAsyncJavaScript("const canvas=document.querySelector('canvas'); const gl=canvas?.getContext('webgl2'); return {readyState:document.readyState,canvas:canvas?{width:canvas.width,height:canvas.height,clientWidth:canvas.clientWidth,clientHeight:canvas.clientHeight,contextLost:gl?.isContextLost()??null}:null,wallpaperType:typeof window.wallpaper,diagnostics:window.lumaEditorScriptIssues?.()||[]}", arguments: [:], in: nil, contentWorld: .page)
+                    let rendererState = try? await host.webView.callAsyncJavaScript("const canvas=document.querySelector('canvas'); const gl=canvas?.getContext('webgl2'); return {readyState:document.readyState,visibility:document.visibilityState,focused:document.hasFocus(),canvas:canvas?{width:canvas.width,height:canvas.height,clientWidth:canvas.clientWidth,clientHeight:canvas.clientHeight,contextLost:gl?.isContextLost()??null}:null,wallpaperInstance:typeof window.wallpaper?.pause==='function',wallpaperType:typeof window.wallpaper,diagnostics:window.lumaEditorScriptIssues?.()||[]}", arguments: [:], in: nil, contentWorld: .page)
                     throw LumaError("Script fixture did not render: \(name); pageLoaded=\(host.pageLoaded), webViewLoading=\(host.webView.isLoading), url=\(host.webView.url?.absoluteString ?? "none"), rendererError=\(failure ?? "none"), diagnostics=\(diagnostics.joined(separator: "; ")), rendererState=\(Safety.json(rendererState ?? NSNull()))")
                 }
                 try await Task.sleep(for: .milliseconds(50))
@@ -259,6 +485,29 @@ import CryptoKit
         try await run("layer-transform-matrix", code: "export function update(value) { const world=thisLayer.getTransformMatrix().transformPoint(new Vec3(0,0,0)); const good=world.subtract(thisLayer.origin).length()<0.001; thisLayer.origin=new Vec3(good?123:456,540,0); return 'TRANSFORM'; }", enabled: true)
         try await run("bounded-timers", code: "export function init() { shared.cancelledRan=false; const cancel=engine.setTimeout(()=>{shared.cancelledRan=true;},1); cancel(); engine.setTimeout(()=>{thisLayer.origin=new Vec3(!shared.cancelledRan && Date.now()>1000000000000?123:456,540,0);},50); } export function update(value) { return 'TIMERS'; }", enabled: true)
         try await run("shared-functions-and-storage", code: "export function update(value) { const good=typeof shared.double==='function' && shared.double(21)===42 && shared.elapsed()>0 && localStorage.get('sibling')===true; thisLayer.origin=new Vec3(good?123:456,540,0); return 'SHARED'; }", enabled: true, helper: "export function init() { shared.double=value=>value*2; shared.elapsed=()=>engine.runtime; localStorage.set('sibling',true); }")
+        try await run("batch-preserves-sibling-mutations", code: "export function update(value){shared.tick=engine.runtime;shared.expected=0.25+(Math.floor(engine.runtime*1000)%500)/1000;thisScene.getLayer('Shared helper').alpha=shared.expected;thisLayer.origin=new Vec3(123,540,0);return shared.seen&&!shared.failed?'BATCH_GOOD':'WAIT';}", enabled: true, helper: "export function update(value){if(shared.tick===engine.runtime){shared.seen=true;if(Math.abs(thisLayer.alpha-shared.expected)>1e-8)shared.failed=true;}return value;}") { host in
+            let deadline = Date().addingTimeInterval(3)
+            var value = ""
+            repeat {
+                try await Task.sleep(for: .milliseconds(100))
+                value = try await host.editorLayerProperties(id: "1")?["text"] as? String ?? ""
+            } while value != "BATCH_GOOD" && Date() < deadline
+            guard value == "BATCH_GOOD" else { throw LumaError("A later script reset its sibling's mutation within the same update batch.") }
+        }
+        try await run("shared-layer-handles-clock-media", code: "let title=''; export function mediaPropertiesChanged(event){title=event.title+'|'+event.artist;} export function update(value){shared.cachedSongs[0].layer.pointsize=32; thisLayer.origin=new Vec3(123,540,0); return Date.now()+'|'+title;}", enabled: true, helper: "export function init(){shared.cachedSongs=[{name:'song',layer:thisScene.getLayer('Text fixture')}]; Object.defineProperty(shared,'workerOnly',{enumerable:true,get(){throw new Error('Shared getter must not be serialized')}});}") { host in
+            _ = try await host.webView.callAsyncJavaScript("window.lumaSetMedia({hasMedia:true,state:1,title:'Actual event title',artist:'Actual event artist'});return true", arguments: [:], in: nil, contentWorld: .page)
+            let deadline = Date().addingTimeInterval(5)
+            var text = ""
+            repeat {
+                try await Task.sleep(for: .milliseconds(100))
+                text = try await host.editorLayerProperties(id: "1")?["text"] as? String ?? ""
+            } while !text.contains("Actual event title|Actual event artist") && Date() < deadline
+            guard text.contains("Actual event title|Actual event artist") else { throw LumaError("Shared layer handles stopped media events: \(await host.editorScriptDiagnostics())") }
+            try await Task.sleep(for: .milliseconds(200))
+            let next = try await host.editorLayerProperties(id: "1")?["text"] as? String ?? ""
+            guard next != text, Double(next.split(separator: "|").first ?? "0") ?? 0 > 1_700_000_000_000 else { throw LumaError("Shared layer handles stopped the advancing clock.") }
+            _ = try await host.capture(time: 0.2, width: 320, height: 180)
+        }
         try await run("vectors-matrices-and-storage", code: "export function init() { localStorage.set('flag',false); localStorage.set('value',{x:7,y:8}); shared.counter=0; } export function update(value) { shared.counter++; const m=Mat4.compose(new Vec3(4,5,6),new Vec3(20,30,40),new Vec3(2,3,4)); const v=new Vec3(2,4,6); const roundtrip=m.inverse().transformPoint(m.transformPoint(v)); const m2=Mat3.compose(new Vec2(4,5),30,new Vec2(2,3)); const p=new Vec2(7,8); const back=m2.inverse().transformPoint(m2.transformPoint(p)); const good=roundtrip.subtract(v).length()<0.0001 && back.subtract(p).length()<0.0001 && Mat4.lookAt(new Vec3(0,0,10),new Vec3(0,0,0),new Vec3(0,1,0)).transformPoint(new Vec3(0,0,10)).length()<0.001 && localStorage.get('flag')===false && localStorage.get('value').x===7 && shared.counter>0; thisLayer.origin=new Vec3(good?123:456,540,0); return 'MATH'; }", enabled: true)
         try await run("scene-settings", code: "export function update(value) { thisLayer.origin=new Vec3(123,540,0); thisScene.clearcolor=new Vec3(0.02,0.75,0.02); thisScene.bloom=false; return 'SCENE'; }", enabled: true) { host in
             try await Task.sleep(for: .milliseconds(250))
